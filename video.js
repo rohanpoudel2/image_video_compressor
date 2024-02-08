@@ -50,7 +50,7 @@ const processVideo = (videoPath, optimiseFolder) => {
         reject(err);
       })
       .on("progress", (progress) => {
-        console.log(`⌛️ Optimising video: ${progress.percent}% done \n`);
+        console.log(`⌛️ Optimising video: ${Math.floor(progress.percent)}% done \n`);
       })
       .save(optimisedPath);
   })
