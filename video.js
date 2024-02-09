@@ -5,10 +5,11 @@ const ffmpeg = require('fluent-ffmpeg');
 process.on('message', payload => {
   const {
     loadFolder,
-    optimiseFolder
+    optimiseFolder,
+    videoConfig
   } = payload;
 
-  optimiseVideo(loadFolder, optimiseFolder);
+  optimiseVideo(loadFolder, optimiseFolder, videoConfig);
 });
 
 const EXTENSION = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
@@ -34,15 +35,15 @@ const loadVideos = (loadFolder) => {
   });
 };
 
-const processVideo = (videoPath, optimiseFolder) => {
+const processVideo = (videoPath, optimiseFolder, videoConfig) => {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(optimiseFolder)) {
       fs.mkdirSync(optimiseFolder);
     }
     const optimisedPath = path.join(optimiseFolder, path.basename(videoPath));
     ffmpeg(videoPath)
-      .fps(30)
-      .addOptions(["-crf 32"])
+      .fps(videoConfig.fps)
+      .addOptions([`-crf ${videoConfig.quality}`])
       .on("end", () => {
         resolve();
       })
@@ -56,11 +57,11 @@ const processVideo = (videoPath, optimiseFolder) => {
   })
 }
 
-const optimiseVideo = (loadFolder, optimiseFolder) => {
+const optimiseVideo = (loadFolder, optimiseFolder, videoConfig) => {
   loadVideos(loadFolder)
     .then(videosPath => {
       if (videosPath) {
-        return Promise.all(videosPath.map(videoPath => processVideo(videoPath, optimiseFolder)));
+        return Promise.all(videosPath.map(videoPath => processVideo(videoPath, optimiseFolder, videoConfig)));
       }
     })
     .then(() => {

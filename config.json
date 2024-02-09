@@ -1,0 +1,10 @@
+{
+  "imageConfig": {
+    "quality": 20,
+    "output": ".webp"
+  },
+  "videoConfig": {
+    "fps": 30,
+    "quality": 32
+  }
+}

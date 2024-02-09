@@ -5,10 +5,11 @@ const sharp = require('sharp');
 process.on('message', payload => {
   const {
     loadFolder,
-    optimiseFolder
+    optimiseFolder,
+    imageConfig
   } = payload;
 
-  optimiseImages(loadFolder, optimiseFolder);
+  optimiseImages(loadFolder, optimiseFolder, imageConfig);
 });
 
 const EXTENSION = ['.jpg', '.jpeg', '.png'];
@@ -44,13 +45,14 @@ const loadImages = (loadFolder) => {
   });
 };
 
-const processImage = (imagePath, optimiseFolder) => {
+const processImage = (imagePath, optimiseFolder, imageConfig) => {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(optimiseFolder)) {
       fs.mkdirSync(optimiseFolder);
     }
-    let image = sharp(imagePath).webp({ quality: 20 });
-    const optimisedPath = path.join(optimiseFolder, path.basename(imagePath));
+    let image = sharp(imagePath).webp({ quality: imageConfig.quality });
+    const optimisedPath = path.join(optimiseFolder, path.basename(imagePath, path.extname(imagePath)) + `${imageConfig.output}`);
+
     image.toFile(optimisedPath, (err) => {
       if (err) {
         console.error(`Error processing image ${imagePath}: ${err}`);
@@ -64,11 +66,11 @@ const processImage = (imagePath, optimiseFolder) => {
   });
 };
 
-const optimiseImages = (loadFolder, optimiseFolder) => {
+const optimiseImages = (loadFolder, optimiseFolder, imageConfig) => {
   loadImages(loadFolder)
     .then(imagesPath => {
       if (imagesPath) {
-        return Promise.all(imagesPath.map(imagePath => processImage(imagePath, optimiseFolder)));
+        return Promise.all(imagesPath.map(imagePath => processImage(imagePath, optimiseFolder, imageConfig)));
       }
     })
     .then(() => {
