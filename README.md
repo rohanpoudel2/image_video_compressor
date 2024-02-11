@@ -51,5 +51,8 @@ This project is licensed under the MIT License - see the [LICENSE](./LICENSE) fi
 ### GitHub Repo Link
 https://github.com/rohanpoudel2/image_video_compressor
 
+### NPMJS Link
+https://www.npmjs.com/package/image-and-video-compressor
+
 ### Created by
 https://github.com/rohanpoudel2
