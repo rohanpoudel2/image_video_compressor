@@ -15,22 +15,22 @@ npm install -g image-and-video-compressor
 ## Image Compression
 
 ```bash
-imgvidcompress optimise:image 'path_to_image_folder' --quality 'compression_quality'
+imgvidcompress optimise:image --loadFolder='path_to_image_folder' --quality='compression_quality'
 ```
 ### Example:
 
 ```bash
-imgvidcompress optimise:image '/path/to/images' --quality 40
+imgvidcompress optimise:image --loadFolder='/path/to/images' --quality=40
 ```
 ## Video Compression
 
 ```bash
-imgvidcompress optimise:video 'path_to_video_folder' --quality 'compression_quality'
+imgvidcompress optimise:video --loadFolder='path_to_video_folder' --quality='compression_quality'
 ```
 ### Example:
 
 ```bash
-imgvidcompress optimise:video '/path/to/videos' --quality 30
+imgvidcompress optimise:video --loadFolder='/path/to/videos' --quality=30
 ```
 # Options
 
