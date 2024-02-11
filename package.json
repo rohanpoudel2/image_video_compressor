@@ -1,16 +1,26 @@
 {
-  "name": "image",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "keywords": [],
   "author": "Rohan Poudel",
-  "license": "ISC",
+  "name": "image-and-video-compressor",
+  "license": "MIT",
+  "version": "1.0.0",
+  "keywords": [
+    "image",
+    "video",
+    "compressor",
+    "nodejs"
+  ],
+  "description": "Compress Image and Video using node",
+  "bin": {
+    "imgvidcompress": "./cli.js"
+  },
+  "scripts": {
+    "optimise:image": "node ./cli.js optimise:image",
+    "optimise:video": "node ./cli.js optimise:video"
+  },
+  "main": "cli.js",
   "dependencies": {
     "fluent-ffmpeg": "^2.1.2",
-    "sharp": "^0.33.2"
+    "sharp": "^0.33.2",
+    "yargs": "^17.7.2"
   }
 }

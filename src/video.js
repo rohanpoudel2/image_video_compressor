@@ -6,10 +6,10 @@ process.on('message', payload => {
   const {
     loadFolder,
     optimiseFolder,
-    videoConfig
+    quality
   } = payload;
 
-  optimiseVideo(loadFolder, optimiseFolder, videoConfig);
+  optimiseVideo(loadFolder, optimiseFolder, quality);
 });
 
 const EXTENSION = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
@@ -35,15 +35,16 @@ const loadVideos = (loadFolder) => {
   });
 };
 
-const processVideo = (videoPath, optimiseFolder, videoConfig) => {
+const processVideo = (videoPath, optimiseFolder, quality) => {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(optimiseFolder)) {
       fs.mkdirSync(optimiseFolder);
     }
     const optimisedPath = path.join(optimiseFolder, path.basename(videoPath));
+    const adjustedQuality = 100 - quality;
     ffmpeg(videoPath)
-      .fps(videoConfig.fps)
-      .addOptions([`-crf ${videoConfig.quality}`])
+      .fps(30)
+      .addOptions([`-crf ${adjustedQuality}`])
       .on("end", () => {
         resolve();
       })
@@ -57,11 +58,11 @@ const processVideo = (videoPath, optimiseFolder, videoConfig) => {
   })
 }
 
-const optimiseVideo = (loadFolder, optimiseFolder, videoConfig) => {
+const optimiseVideo = (loadFolder, optimiseFolder, quality) => {
   loadVideos(loadFolder)
     .then(videosPath => {
       if (videosPath) {
-        return Promise.all(videosPath.map(videoPath => processVideo(videoPath, optimiseFolder, videoConfig)));
+        return Promise.all(videosPath.map(videoPath => processVideo(videoPath, optimiseFolder, quality)));
       }
     })
     .then(() => {
