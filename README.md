@@ -38,6 +38,22 @@ imgvidcompress optimise:video --loadFolder='/path/to/videos' --quality=30
 - `'path_to_video_folder'`: Path to the folder containing videos.
 - `'compression_quality'`: Quality parameter for compression (between 10 and 100).
 
+## Possible Errors (With Video Compression)
+
+You might need to reinstall ff-mpeg in your system.
+
+### MacOS
+```bash
+brew install ffmpeg
+```
+### Ubuntu
+```bash
+sudo apt install ffmpeg
+```
+### Windows
+Please follow the instructions at the official ffmpeg website for windows:
+[Install ffmpeg on Windows](https://www.ffmpeg.org/download.html#build-windows)
+
 # Credits
 This package wouldn't be possible without the following awesome libraries:
 
@@ -46,7 +62,6 @@ This package wouldn't be possible without the following awesome libraries:
 
 # License
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
-
 
 ### GitHub Repo Link
 https://github.com/rohanpoudel2/image_video_compressor

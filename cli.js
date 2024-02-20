@@ -46,8 +46,8 @@ const argv = require('yargs')
   })
   .scriptName('imgvidcompress')
   .usage('Usage: imgvidcompress <command> [options]')
-  .example('imgvidcompress optimise:image "/path/to/images" --quality 80')
-  .example('imgvidcompress optimise:video "/path/to/videos" --quality 50')
+  .example('imgvidcompress optimise:image --loadFolder="/path/to/images" --quality=80')
+  .example('imgvidcompress optimise:video --loadFolder="/path/to/videos" --quality=50')
   .epilogue('For more information, visit: https://www.rohanpoudel.com.np')
   .help()
   .argv;
@@ -56,13 +56,16 @@ const argv = require('yargs')
   const { _ } = argv;
   const command = _[0];
 
+  const loadFolder = argv.loadFolder.replace(/["']/g, "");
+  const quality = parseInt(argv.quality.toString().replace(/["']/g, ""));
+
   switch (command) {
     case 'optimise:image': {
-      startImageProcess(argv.loadFolder, argv.quality);
+      startImageProcess(loadFolder, quality);
       break;
     }
     case 'optimise:video': {
-      startVideoProcess(argv.loadFolder, argv.quality);
+      startVideoProcess(loadFolder, quality);
       break;
     }
     default: {
