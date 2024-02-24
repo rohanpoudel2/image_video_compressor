@@ -1,6 +1,6 @@
 # image-and-video-compressor
 
-######Compress Image and Video using Node.js
+###### Compress Image and Video using Node.js
 
 Note: This package is meant to be used as a global script to compress images and videos and change their extensions. Why should we use sketchy websites to optimise our images and videos when we can do it on our own system, right?
 
@@ -53,7 +53,7 @@ brew install ffmpeg
 ```bash
 sudo apt install ffmpeg
 ```
-######Please utilize the dedicated package manager corresponding to your Linux distribution.
+###### Please utilize the dedicated package manager corresponding to your Linux distribution.
 ### Windows
 Please follow the instructions at the official ffmpeg website for windows:
 [Install ffmpeg on Windows](https://www.ffmpeg.org/download.html#build-windows)
