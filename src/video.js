@@ -2,17 +2,18 @@ const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 
+const EXTENSION = require(path.join(__dirname, '../formats.json')).VideoFormats;
+
 process.on('message', payload => {
   const {
     loadFolder,
     optimiseFolder,
-    quality
+    quality,
+    output
   } = payload;
 
-  optimiseVideo(loadFolder, optimiseFolder, quality);
+  optimiseVideo(loadFolder, optimiseFolder, quality, output);
 });
-
-const EXTENSION = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
 
 const isVideo = fileName => EXTENSION.includes(path.extname(fileName).toLowerCase());
 
@@ -35,16 +36,17 @@ const loadVideos = (loadFolder) => {
   });
 };
 
-const processVideo = (videoPath, optimiseFolder, quality) => {
+const processVideo = (videoPath, optimiseFolder, quality, output) => {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(optimiseFolder)) {
       fs.mkdirSync(optimiseFolder);
     }
-    const optimisedPath = path.join(optimiseFolder, path.basename(videoPath));
+    const optimisedPath = path.join(optimiseFolder, path.basename(videoPath, path.extname(videoPath)) + output);
     const adjustedQuality = 100 - quality;
     ffmpeg(videoPath)
       .fps(30)
       .addOptions([`-crf ${adjustedQuality}`])
+      .keepDAR()
       .on("end", () => {
         resolve();
       })
@@ -58,11 +60,11 @@ const processVideo = (videoPath, optimiseFolder, quality) => {
   })
 }
 
-const optimiseVideo = (loadFolder, optimiseFolder, quality) => {
+const optimiseVideo = (loadFolder, optimiseFolder, quality, output) => {
   loadVideos(loadFolder)
     .then(videosPath => {
       if (videosPath) {
-        return Promise.all(videosPath.map(videoPath => processVideo(videoPath, optimiseFolder, quality)));
+        return Promise.all(videosPath.map(videoPath => processVideo(videoPath, optimiseFolder, quality, output)));
       }
     })
     .then(() => {
