@@ -1,0 +1,32 @@
+{
+  "ImageFormats": [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".avif",
+    ".svg",
+    ".tiff",
+    ".gif",
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+    "avif",
+    "svg",
+    "tiff",
+    "gif"
+  ],
+  "VideoFormats": [
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+    "mp4",
+    "mov",
+    "avi",
+    "mkv",
+    "webm"
+  ]
+}

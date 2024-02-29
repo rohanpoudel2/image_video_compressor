@@ -2,17 +2,18 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 
+const EXTENSION = require(path.join(__dirname, '../formats.json')).ImageFormats;
+
 process.on('message', payload => {
   const {
     loadFolder,
     optimiseFolder,
-    quality
+    quality,
+    output
   } = payload;
 
-  optimiseImages(loadFolder, optimiseFolder, quality);
+  optimiseImages(loadFolder, optimiseFolder, quality, output);
 });
-
-const EXTENSION = ['.jpg', '.jpeg', '.png'];
 
 const isImage = fileName => EXTENSION.includes(path.extname(fileName).toLowerCase());
 
@@ -45,13 +46,13 @@ const loadImages = (loadFolder) => {
   });
 };
 
-const processImage = (imagePath, optimiseFolder, quality) => {
+const processImage = (imagePath, optimiseFolder, quality, output) => {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(optimiseFolder)) {
       fs.mkdirSync(optimiseFolder);
     }
     let image = sharp(imagePath).webp({ quality });
-    const optimisedPath = path.join(optimiseFolder, path.basename(imagePath, path.extname(imagePath)) + `.webp`);
+    const optimisedPath = path.join(optimiseFolder, path.basename(imagePath, path.extname(imagePath)) + output);
 
     image.toFile(optimisedPath, (err) => {
       if (err) {
@@ -66,11 +67,11 @@ const processImage = (imagePath, optimiseFolder, quality) => {
   });
 };
 
-const optimiseImages = (loadFolder, optimiseFolder, quality) => {
+const optimiseImages = (loadFolder, optimiseFolder, quality, output) => {
   loadImages(loadFolder)
     .then(imagesPath => {
       if (imagesPath) {
-        return Promise.all(imagesPath.map(imagePath => processImage(imagePath, optimiseFolder, quality)));
+        return Promise.all(imagesPath.map(imagePath => processImage(imagePath, optimiseFolder, quality, output)));
       }
     })
     .then(() => {
