@@ -1,8 +1,8 @@
 # image-and-video-compressor
 
-###### Compress Image and Video using Node.js
+#### Compress Image and Video using Node.js
 
-Note: This package is meant to be used as a global script to compress images and videos and change their extensions. Why should we use sketchy websites to optimise our images and videos when we can do it on our own system, right?
+Note: This package is meant to be used as a global script to compress images and videos and change their extensions.
 
 ## Overview
 
@@ -41,20 +41,20 @@ imgvidcompress optimise:video --loadFolder='/path/to/videos' --quality=30 --outp
 - `'compression_quality'`: Quality parameter for compression (between 10 and 100).
 - `'output_extension'`: Extension for the output file after compression.
 
-### Possible Error ( With Video Compression )
+##### Possible Error ( With Video Compression )
 
-You might need to reinstall ff-mpeg in your system.
+- You might need to reinstall ff-mpeg in your system.
 
-### MacOS
+### 🍎 MacOS
 ```bash
 brew install ffmpeg
 ```
-### Ubuntu ( Linux )
+### 🐧 Ubuntu ( Linux )
 ```bash
 sudo apt install ffmpeg
 ```
 ###### Please utilize the dedicated package manager corresponding to your Linux distribution.
-### Windows
+### 🪟 Windows
 Please follow the instructions at the official ffmpeg website for windows:
 [Install ffmpeg on Windows](https://www.ffmpeg.org/download.html#build-windows)
 
@@ -67,10 +67,10 @@ This package wouldn't be possible without the following awesome libraries:
 # License
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
 
-### GitHub Repo Link
+### GitHub Repo URL
 https://github.com/rohanpoudel2/image_video_compressor
 
-### NPMJS Link
+### NPMJS URL
 https://www.npmjs.com/package/image-and-video-compressor
 
 ### Created by
