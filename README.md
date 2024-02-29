@@ -45,16 +45,16 @@ imgvidcompress optimise:video --loadFolder='/path/to/videos' --quality=30 --outp
 
 - You might need to reinstall ff-mpeg in your system.
 
-### 🍎 MacOS
+### MacOS
 ```bash
 brew install ffmpeg
 ```
-### 🐧 Ubuntu ( Linux )
+### Ubuntu ( Linux )
 ```bash
 sudo apt install ffmpeg
 ```
 ###### Please utilize the dedicated package manager corresponding to your Linux distribution.
-### 🪟 Windows
+### Windows
 Please follow the instructions at the official ffmpeg website for windows:
 [Install ffmpeg on Windows](https://www.ffmpeg.org/download.html#build-windows)
 
