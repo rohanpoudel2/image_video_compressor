@@ -9,18 +9,29 @@
     "compressor",
     "nodejs"
   ],
-  "description": "Compress Image and Video using node",
+  "description": "Compress Image and Video using Node.js",
   "bin": {
     "imgvidcompress": "./cli.js"
   },
   "scripts": {
     "optimise:image": "node ./cli.js optimise:image",
-    "optimise:video": "node ./cli.js optimise:video"
+    "optimise:video": "node ./cli.js optimise:video",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write ."
   },
   "main": "cli.js",
   "dependencies": {
     "fluent-ffmpeg": "^2.1.2",
     "sharp": "^0.33.2",
     "yargs": "^17.7.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rohanpoudel2/image_video_compressor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rohanpoudel2/image_video_compressor/issues"
+  },
+  "homepage": "https://github.com/rohanpoudel2/image_video_compressor#readme"
 }

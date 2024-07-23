@@ -1,32 +1,13 @@
 {
-  "ImageFormats": [
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-    ".avif",
-    ".svg",
-    ".tiff",
-    ".gif",
-    "jpg",
-    "jpeg",
-    "png",
-    "webp",
-    "avif",
-    "svg",
-    "tiff",
-    "gif"
-  ],
-  "VideoFormats": [
-    ".mp4",
-    ".mov",
-    ".avi",
-    ".mkv",
-    ".webm",
-    "mp4",
-    "mov",
-    "avi",
-    "mkv",
-    "webm"
-  ]
+  "ImageFormats": {
+    ".jpg": "jpeg",
+    ".jpeg": "jpeg",
+    ".png": "png",
+    ".webp": "webp",
+    ".avif": "avif",
+    ".svg": "svg",
+    ".tiff": "tiff",
+    ".gif": "gif"
+  },
+  "VideoFormats": [".mp4", ".mov", ".avi", ".mkv", ".webm"]
 }

@@ -1,66 +1,51 @@
-const fs = require('fs');
-const path = require('path');
-const sharp = require('sharp');
+const path = require("path");
+const sharp = require("sharp");
+const {
+  loadFiles,
+  createOptimiseFolder,
+  logProgress,
+  lastOrOnlyOne,
+} = require("../utils/fns");
 
-const EXTENSION = require(path.join(__dirname, '../formats.json')).ImageFormats;
+const Formats = require(path.join(__dirname, "../formats.json")).ImageFormats;
 
-process.on('message', payload => {
-  const {
-    loadFolder,
-    optimiseFolder,
-    quality,
-    output
-  } = payload;
-
+process.on("message", (payload) => {
+  const { loadFolder, optimiseFolder, quality, output } = payload;
   optimiseImages(loadFolder, optimiseFolder, quality, output);
 });
 
-const isImage = fileName => EXTENSION.includes(path.extname(fileName).toLowerCase());
+const isImage = (fileName) =>
+  Object.keys(Formats).includes(path.extname(fileName).toLowerCase());
 
-let processCount = 0;
-let totalImage = 0;
-
-const progressLog = () => {
-  processCount++;
-  const process = Math.floor(processCount / totalImage * 100);
-  console.log(`⌛️ Optimising Image: ${process}% done \n`);
-}
-
-const loadImages = (loadFolder) => {
+const processImage = (
+  imagePath,
+  optimiseFolder,
+  quality,
+  output,
+  completed
+) => {
   return new Promise((resolve, reject) => {
-    if (!fs.existsSync(loadFolder)) {
-      fs.mkdirSync(loadFolder);
-      reject(`Add images to this path: ${loadFolder}`);
-    }
-    fs.readdir(loadFolder, (err, files) => {
-      if (err) {
-        reject(err);
-      } else {
-        const imagesPath = files
-          .map((fileName) => path.join(loadFolder, fileName))
-          .filter(isImage);
-        totalImage = imagesPath.length;
-        resolve(imagesPath);
-      }
-    });
-  });
-};
+    createOptimiseFolder(optimiseFolder);
 
-const processImage = (imagePath, optimiseFolder, quality, output) => {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(optimiseFolder)) {
-      fs.mkdirSync(optimiseFolder);
+    const optimisedPath = path.join(
+      optimiseFolder,
+      path.basename(imagePath, path.extname(imagePath)) + output
+    );
+    let image = sharp(imagePath);
+
+    const formatMethod = Formats[output];
+    if (!formatMethod) {
+      return reject(new Error(`Unsupported output format: ${output}`));
     }
-    let image = sharp(imagePath).webp({ quality });
-    const optimisedPath = path.join(optimiseFolder, path.basename(imagePath, path.extname(imagePath)) + output);
+
+    image = image[formatMethod]({ quality });
 
     image.toFile(optimisedPath, (err) => {
       if (err) {
         console.error(`Error processing image ${imagePath}: ${err}`);
         reject(err);
       } else {
-        console.log(`Image optimised and saved at: ${optimisedPath} \n`);
-        progressLog();
+        logProgress(null, "Image", optimisedPath, completed);
         resolve();
       }
     });
@@ -68,19 +53,30 @@ const processImage = (imagePath, optimiseFolder, quality, output) => {
 };
 
 const optimiseImages = (loadFolder, optimiseFolder, quality, output) => {
-  loadImages(loadFolder)
-    .then(imagesPath => {
+  loadFiles(loadFolder, isImage)
+    .then((imagesPath) => {
       if (imagesPath) {
-        return Promise.all(imagesPath.map(imagePath => processImage(imagePath, optimiseFolder, quality, output)));
+        global.totalFiles = imagesPath.length;
+        return Promise.all(
+          imagesPath.map((imagePath, i) =>
+            processImage(
+              imagePath,
+              optimiseFolder,
+              quality,
+              output,
+              lastOrOnlyOne(imagesPath, i)
+            )
+          )
+        );
       }
     })
     .then(() => {
-      process.send({ text: 'Image optimisation completed 😄 \n' });
+      process.send({ text: "Image optimisation completed 😄" });
       process.exit();
     })
-    .catch(err => {
+    .catch((err) => {
       console.error(err);
-      process.send({ text: 'Image optimisation error 😵‍💫 \n' });
+      process.send({ text: "Image optimisation error 😵‍💫" });
       process.exit();
     });
 };

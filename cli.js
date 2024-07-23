@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 const path = require("path");
-
 const { startImageProcess, startVideoProcess } = require(
-  path.join(__dirname, "src"),
+  path.join(__dirname, "src")
 );
 const Formats = require(path.join(__dirname, "formats.json"));
 const { processExtension } = require(path.join(__dirname, "utils/fns.js"));
-
 const argv = require("yargs")
   .command("optimise:image", "Optimise images", {
     loadFolder: {
@@ -15,15 +13,15 @@ const argv = require("yargs")
       type: "string",
     },
     quality: {
-      describe: "Quality parameter (between   10 and   100)",
+      describe: "Quality parameter (between 10 and 100)",
       default: 20,
       type: "number",
       coerce: (quality) => {
         if (quality < 10) {
-          throw new Error("Quality cannot be less than   10.");
+          throw new Error("Quality cannot be less than 10.");
         }
         if (quality > 100) {
-          throw new Error("Quality cannot be more than   100.");
+          throw new Error("Quality cannot be more than 100.");
         }
         return quality;
       },
@@ -33,9 +31,9 @@ const argv = require("yargs")
       type: "string",
       default: ".webp",
       coerce: (output) => {
-        if (!Formats.ImageFormats.includes(output)) {
+        if (!Object.keys(Formats.ImageFormats).includes(output)) {
           throw new Error(
-            `Supported formats: \n Images: ${Formats.ImageFormats.filter((format) => format.slice(0, 1) == ".").join(", ")}`,
+            `Supported formats: \n Images: ${Object.keys(Formats.ImageFormats).join(", ")}`
           );
         }
         return output.trim();
@@ -49,15 +47,15 @@ const argv = require("yargs")
       type: "string",
     },
     quality: {
-      describe: "Quality parameter (between   10 and   100)",
+      describe: "Quality parameter (between 10 and 100)",
       default: 20,
       type: "number",
       coerce: (quality) => {
         if (quality < 10) {
-          throw new Error("Quality cannot be less than   10.");
+          throw new Error("Quality cannot be less than 10.");
         }
         if (quality > 100) {
-          throw new Error("Quality cannot be more than   100.");
+          throw new Error("Quality cannot be more than 100.");
         }
         return quality;
       },
@@ -69,7 +67,7 @@ const argv = require("yargs")
       coerce: (output) => {
         if (!Formats.VideoFormats.includes(output)) {
           throw new Error(
-            `Supported formats: \n Videos: ${Formats.VideoFormats.filter((format) => format.slice(0, 1) == ".").join(", ")} `,
+            `Supported formats: \n Videos: ${Formats.VideoFormats.join(", ")} `
           );
         }
         return output.trim();
@@ -79,10 +77,10 @@ const argv = require("yargs")
   .scriptName("imgvidcompress")
   .usage("Usage: imgvidcompress <command> [options]")
   .example(
-    'imgvidcompress optimise:image --loadFolder="/path/to/images" --quality=80 --output=".webp"',
+    'imgvidcompress optimise:image --loadFolder="/path/to/images" --quality=80 --output=".webp"'
   )
   .example(
-    'imgvidcompress optimise:video --loadFolder="/path/to/videos" --quality=50 --output=".mp4"',
+    'imgvidcompress optimise:video --loadFolder="/path/to/videos" --quality=50 --output=".mp4"'
   )
   .epilogue("For more information, visit: https://www.rohanpoudel.com.np")
   .help().argv;
@@ -106,7 +104,7 @@ const argv = require("yargs")
     }
     default: {
       console.error(
-        'Invalid command. Use "optimise:image" or "optimise:video"',
+        'Invalid command. Use "optimise:image" or "optimise:video"'
       );
       process.exit(1);
     }
