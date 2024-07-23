@@ -29,13 +29,33 @@ const createOptimiseFolder = (optimiseFolder) => {
   }
 };
 
-const logProgress = (progress = null) => {
-  processCount++;
-  const percentDone = progress
-    ? progress
-    : Math.floor((processCount / global.totalFiles) * 100);
-  process.stdout.write(`\r⌛️ Optimising: ${percentDone.toFixed(2)}% \n`);
+const cleanLogsPrint = (msg) => {
+  process.stdout.clearLine();
+  process.stdout.cursorTo(0);
+  process.stdout.write(msg);
 };
+
+const logProgress = (
+  progress = null,
+  type = "",
+  optimiseFolder = "",
+  completed = false
+) => {
+  processCount++;
+  const percentDone = parseInt(
+    progress || type === "Video"
+      ? progress
+      : Math.floor((processCount / global.totalFiles) * 100)
+  );
+  cleanLogsPrint(`⌛️ Optimising: ${percentDone}%`);
+  if (completed && percentDone == 100) {
+    cleanLogsPrint(
+      `\n ${type} optimised and saved at: ${optimiseFolder.split("/").slice(0, -1).join("/")}`
+    );
+  }
+};
+
+const lastOrOnlyOne = (arr, i) => i === arr.length - 1 || arr.length === 1;
 
 const processExtension = (ext) => (ext.includes(".") ? ext : `.${ext}`);
 
@@ -43,5 +63,7 @@ module.exports = {
   loadFiles,
   createOptimiseFolder,
   logProgress,
+  lastOrOnlyOne,
   processExtension,
+  cleanLogsPrint,
 };

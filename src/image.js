@@ -1,10 +1,10 @@
-const fs = require("fs");
 const path = require("path");
 const sharp = require("sharp");
 const {
   loadFiles,
   createOptimiseFolder,
   logProgress,
+  lastOrOnlyOne,
 } = require("../utils/fns");
 
 const Formats = require(path.join(__dirname, "../formats.json")).ImageFormats;
@@ -17,7 +17,13 @@ process.on("message", (payload) => {
 const isImage = (fileName) =>
   Object.keys(Formats).includes(path.extname(fileName).toLowerCase());
 
-const processImage = (imagePath, optimiseFolder, quality, output) => {
+const processImage = (
+  imagePath,
+  optimiseFolder,
+  quality,
+  output,
+  completed
+) => {
   return new Promise((resolve, reject) => {
     createOptimiseFolder(optimiseFolder);
 
@@ -39,8 +45,7 @@ const processImage = (imagePath, optimiseFolder, quality, output) => {
         console.error(`Error processing image ${imagePath}: ${err}`);
         reject(err);
       } else {
-        console.log(`Image optimised and saved at: ${optimisedPath}`);
-        logProgress();
+        logProgress(null, "Image", optimisedPath, completed);
         resolve();
       }
     });
@@ -53,8 +58,14 @@ const optimiseImages = (loadFolder, optimiseFolder, quality, output) => {
       if (imagesPath) {
         global.totalFiles = imagesPath.length;
         return Promise.all(
-          imagesPath.map((imagePath) =>
-            processImage(imagePath, optimiseFolder, quality, output)
+          imagesPath.map((imagePath, i) =>
+            processImage(
+              imagePath,
+              optimiseFolder,
+              quality,
+              output,
+              lastOrOnlyOne(imagesPath, i)
+            )
           )
         );
       }

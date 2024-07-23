@@ -4,6 +4,7 @@ const {
   loadFiles,
   createOptimiseFolder,
   logProgress,
+  lastOrOnlyOne,
 } = require("../utils/fns");
 
 const EXTENSION = require(path.join(__dirname, "../formats.json")).VideoFormats;
@@ -16,7 +17,13 @@ process.on("message", (payload) => {
 const isVideo = (fileName) =>
   EXTENSION.includes(path.extname(fileName).toLowerCase());
 
-const processVideo = (videoPath, optimiseFolder, quality, output) => {
+const processVideo = (
+  videoPath,
+  optimiseFolder,
+  quality,
+  output,
+  completed
+) => {
   return new Promise((resolve, reject) => {
     createOptimiseFolder(optimiseFolder);
     const optimisedPath = path.join(
@@ -27,16 +34,19 @@ const processVideo = (videoPath, optimiseFolder, quality, output) => {
 
     ffmpeg(videoPath)
       .fps(30)
-      .addOptions([`-crf ${adjustedQuality}`])
-      .keepDAR()
+      .videoCodec("libx264")
+      .outputOptions([`-crf ${adjustedQuality}`, "-preset fast"])
       .on("end", () => {
+        logProgress(null, "Video", optimisedPath, completed);
         resolve();
       })
       .on("error", (err) => {
+        console.error(`Error processing video ${videoPath}: ${err}`);
         reject(err);
       })
       .on("progress", (progress) => {
-        logProgress(progress.percent, "Video");
+        const percentage = progress.percent ? progress.percent : 0;
+        logProgress(percentage, "Video", optimisedPath, false);
       })
       .save(optimisedPath);
   });
@@ -48,8 +58,14 @@ const optimiseVideo = (loadFolder, optimiseFolder, quality, output) => {
       if (videosPath) {
         global.totalFiles = videosPath.length;
         return Promise.all(
-          videosPath.map((videoPath) =>
-            processVideo(videoPath, optimiseFolder, quality, output)
+          videosPath.map((videoPath, i) =>
+            processVideo(
+              videoPath,
+              optimiseFolder,
+              quality,
+              output,
+              lastOrOnlyOne(videosPath, i)
+            )
           )
         );
       }
