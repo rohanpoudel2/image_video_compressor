@@ -64,7 +64,7 @@ That is the whole quick start. No install, no config file, no flags.
   - [Progress and cancellation](#progress-and-cancellation)
   - [Branded types](#branded-types)
 - [Automation and AI agents](#automation-and-ai-agents)
-  - [The `--json` contract](#the---json-contract)
+  - [JSON output contract](#json-output-contract)
   - [Exit codes](#exit-codes)
   - [Error codes](#error-codes)
 - [Recipes](#recipes)
@@ -118,23 +118,23 @@ Paths can be files or directories, and your shell's globs work as usual. Output 
 
 Shared by `run`, `image` and `video`:
 
-| Option                  | Default               | Description                                                        |
-| ----------------------- | --------------------- | ------------------------------------------------------------------ |
-| `-q, --quality <1-100>` | `75`                  | Higher is better looking. Mapped onto each codec's own scale.      |
-| `-t, --to <format>`     | `.webp` / `.mp4`      | Output format. Run `formats` to see what is available.<sup>†</sup> |
-| `-o, --out <dir>`       | `<source>/compressed` | Output directory. Structure is mirrored under it.                  |
-| `-r, --recursive`       | off                   | Descend into subdirectories.                                       |
-| `-c, --concurrency <n>` | see below             | Files processed at once.                                           |
-| `--max-width <px>`      | —                     | Shrink anything wider. Never enlarges.                             |
-| `--max-height <px>`     | —                     | Shrink anything taller. Never enlarges.                            |
-| `--overwrite`           | off                   | Replace existing output files instead of skipping them.            |
-| `--dry-run`             | off                   | Report the plan, write nothing.                                    |
-| `--json`                | off                   | One JSON document on stdout; human output moves to stderr.         |
-| `--quiet`               | off                   | Suppress all non-error output.                                     |
-| `--no-color`            | —                     | Disable coloured output.                                           |
-| `--no-skip-larger`      | —                     | Write the output even when it ends up bigger than the source.      |
+| Option                  | Default               | Description                                                   |
+| ----------------------- | --------------------- | ------------------------------------------------------------- |
+| `-q, --quality <1-100>` | `75`                  | Higher is better looking. Mapped onto each codec's own scale. |
+| `-t, --to <format>`     | `.webp` / `.mp4`      | Output format. Run `formats` to see what is available.        |
+| `-o, --out <dir>`       | `<source>/compressed` | Output directory. Structure is mirrored under it.             |
+| `-r, --recursive`       | off                   | Descend into subdirectories.                                  |
+| `-c, --concurrency <n>` | see below             | Files processed at once.                                      |
+| `--max-width <px>`      | —                     | Shrink anything wider. Never enlarges.                        |
+| `--max-height <px>`     | —                     | Shrink anything taller. Never enlarges.                       |
+| `--overwrite`           | off                   | Replace existing output files instead of skipping them.       |
+| `--dry-run`             | off                   | Report the plan, write nothing.                               |
+| `--json`                | off                   | One JSON document on stdout; human output moves to stderr.    |
+| `--quiet`               | off                   | Suppress all non-error output.                                |
+| `--no-color`            | —                     | Disable coloured output.                                      |
+| `--no-skip-larger`      | —                     | Write the output even when it ends up bigger than the source. |
 
-<sup>†</sup> Images default to WebP, except that a source already in a modern format keeps it — an `.avif` input stays AVIF and a `.webp` input stays WebP rather than being pointlessly transcoded. Videos default to `.mp4`.
+**On the default format.** Images default to WebP, except that a source already in a modern format keeps it — an `.avif` input stays AVIF and a `.webp` input stays WebP rather than being pointlessly transcoded. Videos default to `.mp4`.
 
 Concurrency defaults differ by media kind, because the two libraries behave differently: images get `min(cores, 8)` since sharp parallelises internally through libvips, videos get `cores / 4` since a single ffmpeg process already saturates several cores. Stacking more mostly buys contention.
 
@@ -357,7 +357,7 @@ This is what stops a 1-100 quality value being fed to a flag that expects a 0-51
 
 The tool is built to be driven by something that is not a person: a build script, a CI job, or a coding agent.
 
-### The `--json` contract
+### JSON output contract
 
 `--json` writes exactly one JSON document to stdout. Every human-facing byte — banner, progress, summary, warnings — goes to stderr, so the stream is always safe to parse.
 
