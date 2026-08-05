@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { tempDir, makeImage } from "./helpers.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const serverPath = join(root, "mcp", "dist", "bin.js");
@@ -17,8 +18,20 @@ const built = existsSync(serverPath);
 
 describe.skipIf(!built)("mcp server", () => {
   let client: Client;
+  let fixtures: string;
+  let cleanup: () => Promise<void>;
 
   beforeAll(async () => {
+    // Generated rather than read from samples/, which is gitignored and absent
+    // in CI — depending on it made this suite pass locally and fail on a runner.
+    ({ dir: fixtures, cleanup } = await tempDir());
+    await makeImage(join(fixtures, "photo.png"), {
+      width: 400,
+      height: 300,
+      noise: true,
+    });
+    await makeImage(join(fixtures, "flat.png"), { width: 300, height: 200 });
+
     client = new Client({ name: "test", version: "1.0.0" });
     await client.connect(
       new StdioClientTransport({ command: process.execPath, args: [serverPath] }),
@@ -27,6 +40,7 @@ describe.skipIf(!built)("mcp server", () => {
 
   afterAll(async () => {
     await client?.close();
+    await cleanup?.();
   });
 
   /**
@@ -70,16 +84,57 @@ describe.skipIf(!built)("mcp server", () => {
   });
 
   it("never writes anything on a dry run", async () => {
-    const outDir = join(root, "test-mcp-dry-output");
-    const report = text<{ dryRun: boolean }>(
+    const outDir = join(fixtures, "dry-output");
+    const report = text<{ dryRun: boolean; summary: { totalFiles: number } }>(
       await client.callTool({
         name: "compress_media",
-        arguments: { paths: [join(root, "samples", "images")], dryRun: true, outDir },
+        arguments: { paths: [fixtures], dryRun: true, outDir },
       }),
     );
 
     expect(report.dryRun).toBe(true);
+    expect(report.summary.totalFiles).toBeGreaterThan(0);
     expect(existsSync(outDir)).toBe(false);
+  });
+
+  it("compresses for real and reports what it saved", async () => {
+    const outDir = join(fixtures, "real-output");
+    const report = text<{
+      ok: boolean;
+      summary: { compressed: number; savedBytes: number };
+      results: { status: string; outputPath?: string }[];
+    }>(
+      await client.callTool({
+        name: "compress_media",
+        arguments: {
+          paths: [fixtures],
+          kind: "image",
+          to: ".webp",
+          outDir,
+          overwrite: true,
+        },
+      }),
+    );
+
+    expect(report.ok).toBe(true);
+    expect(report.summary.compressed).toBeGreaterThan(0);
+
+    for (const result of report.results) {
+      if (result.status === "compressed")
+        expect(existsSync(result.outputPath!)).toBe(true);
+    }
+  });
+
+  it("identifies a file it was given", async () => {
+    const probe = text<{ kind: string; bytes: number }>(
+      await client.callTool({
+        name: "probe_media",
+        arguments: { path: join(fixtures, "photo.png") },
+      }),
+    );
+
+    expect(probe.kind).toBe("image");
+    expect(probe.bytes).toBeGreaterThan(0);
   });
 
   it("rejects arguments that violate the schema", async () => {
