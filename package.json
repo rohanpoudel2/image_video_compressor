@@ -1,34 +1,80 @@
 {
-  "author": "Rohan Poudel",
   "name": "image-and-video-compressor",
+  "version": "2.0.0",
+  "description": "Fast, type-safe image and video compression for Node.js \u2014 parallel by default, with a colorful CLI and machine-readable JSON output for AI agents.",
+  "author": "Rohan Poudel",
   "license": "MIT",
-  "version": "1.0.6",
+  "type": "module",
   "keywords": [
     "image",
     "video",
     "compressor",
-    "nodejs"
+    "compression",
+    "optimise",
+    "optimize",
+    "sharp",
+    "ffmpeg",
+    "webp",
+    "avif",
+    "cli",
+    "typescript",
+    "ai-agent"
   ],
-  "description": "Compress Image and Video using Node.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
-    "imgvidcompress": "./cli.js"
+    "imgvidcompress": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.11"
   },
   "scripts": {
-    "optimise:image": "node ./cli.js optimise:image",
-    "optimise:video": "node ./cli.js optimise:video",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
+    "samples": "node scripts/make-samples.mjs"
   },
-  "main": "cli.js",
   "dependencies": {
-    "fluent-ffmpeg": "^2.1.2",
-    "sharp": "^0.33.2",
-    "yargs": "^17.7.2"
+    "commander": "^15.0.0",
+    "picocolors": "^1.1.1",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^4.1.10"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/rohanpoudel2/image_video_compressor.git"
+    "url": "git+https://github.com/rohanpoudel2/image_video_compressor.git"
   },
   "bugs": {
     "url": "https://github.com/rohanpoudel2/image_video_compressor/issues"
