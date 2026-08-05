@@ -24,6 +24,7 @@ export {
   compressImages,
   compressVideos,
   summarise,
+  planStreams,
   DEFAULT_OUTPUT_DIRNAME,
 } from "./core/compress.js";
 
@@ -71,6 +72,7 @@ export {
   parseProbe,
   type FfmpegTools,
   type MediaProbe,
+  type ProbedStream,
 } from "./codecs/ffmpeg.js";
 export { resolveImageTarget } from "./codecs/image.js";
 export {
@@ -80,6 +82,9 @@ export {
   curatedArgs,
   validateSpeed,
   resolveAudioBitrate,
+  planAudioBitrates,
+  type StreamPlan,
+  type AudioBitratePlan,
 } from "./codecs/video.js";
 
 // --- Types: quality/dimension scales ---
@@ -124,7 +129,11 @@ export {
   codecSpec,
   canCopyAudioInto,
   defaultAudioBitrate,
+  subtitleCodecFor,
+  isImageSubtitle,
+  IMAGE_SUBTITLE_CODECS,
   AUDIO_STREAM_TO_ENCODER,
+  type SubtitleSupport,
   type VideoContainer,
   type VideoOutputSpec,
   type VideoCodec,
@@ -158,4 +167,5 @@ export {
   type ErrorCode,
   type ProgressEvent,
   type ResizeOptions,
+  type Warnings,
 } from "./types/results.js";

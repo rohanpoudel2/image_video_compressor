@@ -111,31 +111,52 @@ export async function probeDuration(
   });
 }
 
-export interface MediaProbe {
-  readonly durationSeconds: number | null;
-  /** Null when the source has no audio track at all. */
-  readonly audio: {
-    /** Stream codec name as ffprobe reports it, e.g. `aac`, not `libopus`. */
-    readonly codec: string;
-    /** Bits per second, or null when the container does not record it. */
-    readonly bitrate: number | null;
-  } | null;
+/** One stream from the source, as ffprobe describes it. */
+export interface ProbedStream {
+  /** Index within the input file, used to build `-map 0:<index>`. */
+  readonly index: number;
+  /** Codec name as ffprobe reports it, e.g. `aac` — not the encoder, `libopus`. */
+  readonly codec: string;
+  readonly bitrate: number | null;
+  readonly language: string | null;
+  readonly title: string | null;
 }
 
+export interface MediaProbe {
+  readonly durationSeconds: number | null;
+  /** Real video tracks. Cover art is excluded — see {@link parseProbe}. */
+  readonly video: readonly ProbedStream[];
+  readonly audio: readonly ProbedStream[];
+  readonly subtitles: readonly ProbedStream[];
+  /** Cover art and thumbnails, kept separate so they are never re-encoded. */
+  readonly attachedPictures: readonly ProbedStream[];
+  /** True when the source carries font attachments, which ASS subtitles need. */
+  readonly hasAttachments: boolean;
+}
+
+const EMPTY_PROBE: MediaProbe = {
+  durationSeconds: null,
+  video: [],
+  audio: [],
+  subtitles: [],
+  attachedPictures: [],
+  hasAttachments: false,
+};
+
 /**
- * Read duration and audio details in one ffprobe call.
+ * Describe every stream in one ffprobe call.
  *
- * The audio side matters more than it looks. On short clips, or anything with
- * mostly-static video, the audio track *is* the file — a 3-second SMPTE-bars
- * clip here is 79% audio — so re-encoding it at a fixed bitrate higher than the
- * source silently inflates the output past the original.
+ * The full picture is needed because ffmpeg's *default* stream selection takes
+ * exactly one stream per type. Left to itself it silently discards a film's
+ * second language, its commentary track, and every subtitle past the first —
+ * which is precisely what this tool used to do.
  */
 export async function probeMedia(ffprobe: string, file: string): Promise<MediaProbe> {
   const args = [
     "-v",
     "error",
     "-show_entries",
-    "format=duration:stream=codec_type,codec_name,bit_rate",
+    "format=duration:stream=index,codec_type,codec_name,bit_rate,disposition:stream_tags=language,title",
     "-of",
     "json",
     file,
@@ -152,9 +173,18 @@ export async function probeMedia(ffprobe: string, file: string): Promise<MediaPr
   return parseProbe(raw);
 }
 
+interface ProbeJsonStream {
+  index?: number;
+  codec_type?: string;
+  codec_name?: string;
+  bit_rate?: string;
+  disposition?: Record<string, number>;
+  tags?: Record<string, string>;
+}
+
 interface ProbeJson {
   format?: { duration?: string };
-  streams?: { codec_type?: string; codec_name?: string; bit_rate?: string }[];
+  streams?: ProbeJsonStream[];
 }
 
 export function parseProbe(raw: string): MediaProbe {
@@ -162,21 +192,59 @@ export function parseProbe(raw: string): MediaProbe {
   try {
     parsed = JSON.parse(raw) as ProbeJson;
   } catch {
-    return { durationSeconds: null, audio: null };
+    return EMPTY_PROBE;
   }
 
   const seconds = Number.parseFloat(parsed.format?.duration ?? "");
-  const audioStream = parsed.streams?.find((s) => s.codec_type === "audio");
-  const bitrate = Number.parseInt(audioStream?.bit_rate ?? "", 10);
+  const video: ProbedStream[] = [];
+  const audio: ProbedStream[] = [];
+  const subtitles: ProbedStream[] = [];
+  const attachedPictures: ProbedStream[] = [];
+  let hasAttachments = false;
+
+  for (const raw of parsed.streams ?? []) {
+    if (raw.index === undefined || !raw.codec_name) continue;
+
+    const bitrate = Number.parseInt(raw.bit_rate ?? "", 10);
+    const stream: ProbedStream = {
+      index: raw.index,
+      codec: raw.codec_name,
+      bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : null,
+      language: raw.tags?.["language"] ?? null,
+      title: raw.tags?.["title"] ?? null,
+    };
+
+    switch (raw.codec_type) {
+      case "video":
+        // Cover art is a video stream by type but a still image in practice.
+        // Handing it to a video encoder produces a broken one-frame track.
+        if (raw.disposition?.["attached_pic"] === 1) attachedPictures.push(stream);
+        else video.push(stream);
+        break;
+      case "audio":
+        audio.push(stream);
+        break;
+      case "subtitle":
+        subtitles.push(stream);
+        break;
+      case "attachment":
+        // Usually fonts, which ASS subtitles need in order to render.
+        hasAttachments = true;
+        break;
+      default:
+        // Data and timecode streams are deliberately ignored: most containers
+        // refuse to mux them and they carry nothing a viewer will miss.
+        break;
+    }
+  }
 
   return {
     durationSeconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
-    audio: audioStream?.codec_name
-      ? {
-          codec: audioStream.codec_name,
-          bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : null,
-        }
-      : null,
+    video,
+    audio,
+    subtitles,
+    attachedPictures,
+    hasAttachments,
   };
 }
 

@@ -61,6 +61,16 @@ export type JobResult =
   | ({ readonly status: "skipped" } & SkippedResult)
   | ({ readonly status: "failed" } & FailedResult);
 
+/**
+ * Non-fatal notes about what happened to a file.
+ *
+ * Used for things a caller would want to know but which do not make the run a
+ * failure — most importantly a stream that the target container could not
+ * carry. Losing a subtitle or a commentary track without saying so is worse
+ * than refusing outright, because nobody notices until they need it.
+ */
+export type Warnings = readonly string[];
+
 export interface CompressedResult {
   readonly kind: MediaKind;
   readonly inputPath: string;
@@ -72,6 +82,7 @@ export interface CompressedResult {
   /** Fraction of the original size removed, 0-1. */
   readonly savedRatio: number;
   readonly durationMs: number;
+  readonly warnings?: Warnings;
 }
 
 export interface SkippedResult {
@@ -80,6 +91,7 @@ export interface SkippedResult {
   readonly outputPath: string;
   readonly inputBytes: number;
   readonly reason: SkipReason;
+  readonly warnings?: Warnings;
 }
 
 export interface FailedResult {
@@ -110,6 +122,7 @@ export interface CompressionSummary {
   readonly savedBytes: number;
   readonly savedRatio: number;
   readonly durationMs: number;
+  readonly warnings?: Warnings;
 }
 
 export interface CompressionReport {

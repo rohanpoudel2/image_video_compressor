@@ -196,12 +196,62 @@ export function canCopyAudioInto(
   return (VIDEO_CONTAINERS[container].audio as readonly string[]).includes(encoder);
 }
 
+/**
+ * How a container handles subtitles.
+ *
+ * Subtitles are not one thing. Text subtitles (SRT, ASS, WebVTT) and
+ * image-based ones (DVD, Blu-ray PGS) are stored completely differently, and
+ * an image subtitle cannot be converted into a text one — the words only exist
+ * as pixels. Containers accept different subsets, so each needs its own answer:
+ *
+ * - `copy` — mux the existing stream untouched
+ * - a codec name — transcode to the container's required format
+ * - `null` — this container cannot carry that kind at all
+ */
+export interface SubtitleSupport {
+  /**
+   * `string & {}` keeps `"copy"` visible as an autocomplete suggestion without
+   * the wider `string` swallowing the literal.
+   */
+  readonly text: "copy" | (string & {}) | null;
+  readonly image: "copy" | null;
+}
+
 interface ContainerSpec {
   readonly video: readonly VideoCodec[];
   readonly audio: readonly AudioCodec[];
   readonly label: string;
   /** ffmpeg muxer name, when it differs from the extension. */
   readonly muxer: string;
+  readonly subtitles: SubtitleSupport;
+}
+
+/**
+ * Subtitle codecs whose content is pixels rather than characters.
+ *
+ * These can only ever be copied, never transcoded into a text format.
+ */
+export const IMAGE_SUBTITLE_CODECS = [
+  "dvd_subtitle",
+  "dvdsub",
+  "hdmv_pgs_subtitle",
+  "pgssub",
+  "dvb_subtitle",
+  "dvbsub",
+  "xsub",
+] as const;
+
+export function isImageSubtitle(codec: string): boolean {
+  return (IMAGE_SUBTITLE_CODECS as readonly string[]).includes(codec.toLowerCase());
+}
+
+/** The `-c:s` value for a given source subtitle, or null if it cannot be carried. */
+export function subtitleCodecFor(
+  container: VideoContainer,
+  sourceCodec: string,
+): string | null {
+  const support = VIDEO_CONTAINERS[container].subtitles;
+  return isImageSubtitle(sourceCodec) ? support.image : support.text;
 }
 
 export const VIDEO_CONTAINERS = {
@@ -210,18 +260,21 @@ export const VIDEO_CONTAINERS = {
     audio: ["aac", "libmp3lame", "flac", "copy"],
     label: "MP4",
     muxer: "mp4",
+    subtitles: { text: "mov_text", image: null },
   },
   ".mkv": {
     video: ["libx264", "libx265", "libsvtav1", "libaom-av1", "libvpx-vp9", "libvpx"],
     audio: ["aac", "libopus", "libmp3lame", "libvorbis", "flac", "copy"],
     label: "Matroska",
     muxer: "matroska",
+    subtitles: { text: "copy", image: "copy" },
   },
   ".mov": {
     video: ["libx264", "libx265"],
     audio: ["aac", "copy"],
     label: "QuickTime",
     muxer: "mov",
+    subtitles: { text: "mov_text", image: null },
   },
   ".webm": {
     // No H.264 here — that is the whole point.
@@ -229,18 +282,21 @@ export const VIDEO_CONTAINERS = {
     audio: ["libopus", "libvorbis"],
     label: "WebM",
     muxer: "webm",
+    subtitles: { text: "webvtt", image: null },
   },
   ".avi": {
     video: ["libx264", "mpeg4"],
     audio: ["libmp3lame", "copy"],
     label: "AVI",
     muxer: "avi",
+    subtitles: { text: null, image: null },
   },
   ".ogv": {
     video: ["libtheora"],
     audio: ["libvorbis", "libopus"],
     label: "Ogg Video",
     muxer: "ogv",
+    subtitles: { text: null, image: null },
   },
 } as const satisfies Record<`.${string}`, ContainerSpec>;
 

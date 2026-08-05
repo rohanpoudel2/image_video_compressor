@@ -17,6 +17,26 @@ import {
 import type { Crf, Quality } from "../types/brand.js";
 import type { ResizeOptions } from "../types/results.js";
 
+/**
+ * The streams to carry into the output, already decided by the caller.
+ *
+ * Explicit indices rather than `-map 0` or `-map 0:a`: cover art is typed as a
+ * video stream but is a still image, so a blanket video map hands it to the
+ * video encoder and produces a broken one-frame track. Naming indices also
+ * makes per-stream options like `-b:a:1` line up predictably, because output
+ * stream order follows map order.
+ */
+export interface StreamPlan {
+  readonly video: readonly number[];
+  readonly audio: readonly number[];
+  readonly subtitles: readonly { index: number; codec: string }[];
+  /** Font attachments, which ASS subtitles need in order to render. */
+  readonly attachments: boolean;
+}
+
+/** Bitrate for one output audio stream, positional to its index in the plan. */
+export type AudioBitratePlan = readonly (string | null)[];
+
 /** The generic argument builder both tiers delegate to. */
 interface RawArgsParams {
   readonly inputPath: string;
@@ -27,10 +47,12 @@ interface RawArgsParams {
   /** `null` when we have no quality model for the chosen encoder. */
   readonly quality: { readonly flag: string; readonly value: number } | null;
   readonly extraVideoFlags: readonly string[];
-  readonly audioBitrate: string | null;
+  readonly audioBitrates: AudioBitratePlan;
   readonly fps: number | undefined;
   readonly resize: ResizeOptions | undefined;
   readonly faststart: boolean;
+  /** Omitted when the caller could not probe; ffmpeg then selects by default. */
+  readonly streams: StreamPlan | null;
 }
 
 function buildRawArgs(params: RawArgsParams): string[] {
@@ -48,6 +70,16 @@ function buildRawArgs(params: RawArgsParams): string[] {
     "pipe:1",
   ];
 
+  // Map every stream worth keeping. ffmpeg's default selection takes exactly
+  // one stream per type, which silently discards second-language audio,
+  // commentary tracks and every subtitle past the first.
+  if (params.streams) {
+    for (const index of params.streams.video) args.push("-map", `0:${index}`);
+    for (const index of params.streams.audio) args.push("-map", `0:${index}`);
+    for (const sub of params.streams.subtitles) args.push("-map", `0:${sub.index}`);
+    if (params.streams.attachments) args.push("-map", "0:t?");
+  }
+
   if (params.videoCodec) args.push("-c:v", params.videoCodec);
   if (params.quality) args.push(params.quality.flag, String(params.quality.value));
   args.push(...params.extraVideoFlags);
@@ -61,9 +93,22 @@ function buildRawArgs(params: RawArgsParams): string[] {
 
   if (params.audioCodec) {
     args.push("-c:a", params.audioCodec);
-    if (params.audioCodec !== "copy" && params.audioBitrate) {
-      args.push("-b:a", params.audioBitrate);
+    if (params.audioCodec !== "copy") {
+      // Per stream, not global: tracks in one file routinely differ in bitrate,
+      // and a single -b:a would inflate the quiet ones to match the loudest.
+      params.audioBitrates.forEach((bitrate, position) => {
+        if (bitrate) args.push(`-b:a:${position}`, bitrate);
+      });
     }
+  }
+
+  // Subtitles are grouped by the codec they need, since a file can mix text and
+  // image subtitles and they cannot be handled the same way.
+  if (params.streams) {
+    params.streams.subtitles.forEach((sub, position) => {
+      args.push(`-c:s:${position}`, sub.codec);
+    });
+    if (params.streams.attachments) args.push("-c:t", "copy");
   }
 
   // Move the index to the front so playback can begin before the file finishes
@@ -121,6 +166,17 @@ export function resolveAudioBitrate(
   return `${Math.max(32, Math.min(fallback, sourceKbps))}k`;
 }
 
+/** One capped bitrate per audio stream, positional to the stream plan. */
+export function planAudioBitrates(
+  codec: string,
+  sourceBitrates: readonly (number | null)[] | undefined,
+): AudioBitratePlan {
+  if (!sourceBitrates || sourceBitrates.length === 0) {
+    return [resolveAudioBitrate(codec, null)];
+  }
+  return sourceBitrates.map((bitrate) => resolveAudioBitrate(codec, bitrate));
+}
+
 const DEFAULT_AUDIO_BITRATES: Record<string, number> = {
   aac: 128,
   libopus: 96,
@@ -139,8 +195,9 @@ export interface BuildVideoArgsParams<C extends VideoContainer> {
   readonly speed?: string | undefined;
   readonly fps?: number | undefined;
   readonly resize?: ResizeOptions | undefined;
-  /** Source audio bitrate in bits/sec, so the output never exceeds it. */
-  readonly sourceAudioBitrate?: number | null | undefined;
+  /** Per-stream source bitrates in bits/sec, so no track is ever inflated. */
+  readonly sourceAudioBitrates?: readonly (number | null)[] | undefined;
+  readonly streams?: StreamPlan | null | undefined;
 }
 
 /**
@@ -164,10 +221,11 @@ export function buildVideoArgs<C extends VideoContainer>(
     audioCodec,
     quality: { flag: VIDEO_CODECS[codec].quality.flag, value: params.crf },
     extraVideoFlags: videoFlagsFor(codec, params.speed),
-    audioBitrate: resolveAudioBitrate(audioCodec, params.sourceAudioBitrate ?? null),
+    audioBitrates: planAudioBitrates(audioCodec, params.sourceAudioBitrates),
     fps: params.fps,
     resize: params.resize,
     faststart: params.container === ".mp4" || params.container === ".mov",
+    streams: params.streams ?? null,
   });
 }
 
@@ -183,7 +241,8 @@ export interface BuildOpenVideoArgsParams {
   readonly speed?: string | undefined;
   readonly fps?: number | undefined;
   readonly resize?: ResizeOptions | undefined;
-  readonly sourceAudioBitrate?: number | null | undefined;
+  readonly sourceAudioBitrates?: readonly (number | null)[] | undefined;
+  readonly streams?: StreamPlan | null | undefined;
 }
 
 /**
@@ -208,13 +267,14 @@ export function buildOpenVideoArgs(params: BuildOpenVideoArgsParams): string[] {
       ? { flag: model.flag, value: mapQuality(params.quality, model) }
       : null,
     extraVideoFlags: known ? videoFlagsFor(codec, params.speed) : [],
-    audioBitrate:
+    audioBitrates:
       params.audioCodec === null
-        ? null
-        : resolveAudioBitrate(params.audioCodec, params.sourceAudioBitrate ?? null),
+        ? []
+        : planAudioBitrates(params.audioCodec, params.sourceAudioBitrates),
     fps: params.fps,
     resize: params.resize,
     faststart: [".mp4", ".mov", ".m4v"].includes(params.extension),
+    streams: params.streams ?? null,
   });
 }
 
@@ -248,7 +308,8 @@ export function curatedArgs<C extends VideoContainer>(params: {
   speed?: string | undefined;
   fps?: number | undefined;
   resize?: ResizeOptions | undefined;
-  sourceAudioBitrate?: number | null | undefined;
+  sourceAudioBitrates?: readonly (number | null)[] | undefined;
+  streams?: StreamPlan | null | undefined;
 }): string[] {
   const codec = params.videoCodec;
   validateSpeed(codec, params.speed);
@@ -263,7 +324,8 @@ export function curatedArgs<C extends VideoContainer>(params: {
     speed: params.speed,
     fps: params.fps,
     resize: params.resize,
-    sourceAudioBitrate: params.sourceAudioBitrate,
+    sourceAudioBitrates: params.sourceAudioBitrates,
+    streams: params.streams,
   });
 }
 

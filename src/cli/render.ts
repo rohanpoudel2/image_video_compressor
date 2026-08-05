@@ -133,7 +133,15 @@ export class Renderer {
       : results.filter((r) => r.status === "skipped" && report.dryRun);
 
     if (rows.length > 0) this.write("\n");
-    for (const result of rows) this.write(`  ${detailLine(result)}\n`);
+    for (const result of rows) {
+      this.write(`  ${detailLine(result)}\n`);
+      // Anything the target container could not carry is named here, so a lost
+      // subtitle or commentary track is never a silent surprise.
+      const warnings = "warnings" in result ? (result.warnings ?? []) : [];
+      for (const warning of warnings) {
+        this.write(`    ${pc.yellow("!")} ${pc.dim(warning)}\n`);
+      }
+    }
 
     const failures = results.filter((r) => r.status === "failed");
     if (failures.length > 0) {
@@ -222,10 +230,14 @@ function fileBar(ratio: number): string {
 /** One-line-per-file output for non-TTY streams: greppable, no escape codes. */
 function plainLine(result: JobResult): string {
   switch (result.status) {
-    case "compressed":
-      return `  ok      ${basename(result.inputPath)} → ${basename(result.outputPath)}  ${formatBytes(result.inputBytes)} → ${formatBytes(result.outputBytes)} (${formatPercent(result.savedRatio)})`;
-    case "skipped":
-      return `  skip    ${basename(result.inputPath)}  (${result.reason})`;
+    case "compressed": {
+      const notes = (result.warnings ?? []).map((w) => `\n  warn    ${w}`).join("");
+      return `  ok      ${basename(result.inputPath)} → ${basename(result.outputPath)}  ${formatBytes(result.inputBytes)} → ${formatBytes(result.outputBytes)} (${formatPercent(result.savedRatio)})${notes}`;
+    }
+    case "skipped": {
+      const notes = (result.warnings ?? []).map((w) => `\n  warn    ${w}`).join("");
+      return `  skip    ${basename(result.inputPath)}  (${result.reason})${notes}`;
+    }
     case "failed":
       return `  FAIL    ${basename(result.inputPath)}  [${result.error.code}] ${result.error.message.split("\n")[0] ?? ""}`;
   }
