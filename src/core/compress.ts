@@ -5,16 +5,28 @@ import { discoverFiles, type DiscoveredFile } from "./discover.js";
 import { mapWithConcurrency, defaultConcurrency } from "./pool.js";
 import { CompressorError, toFailure } from "./errors.js";
 import { encodeImage, resolveImageTarget } from "../codecs/image.js";
-import { encodeVideo, curatedArgs, buildOpenVideoArgs } from "../codecs/video.js";
+import {
+  encodeVideo,
+  curatedArgs,
+  buildOpenVideoArgs,
+  type StreamPlan,
+} from "../codecs/video.js";
 import { muxerDetail, ffmpegCapabilities } from "../codecs/ffmpeg-capabilities.js";
-import { resolveFfmpeg, probeMedia, type FfmpegTools } from "../codecs/ffmpeg.js";
+import {
+  resolveFfmpeg,
+  probeMedia,
+  type FfmpegTools,
+  type MediaProbe,
+} from "../codecs/ffmpeg.js";
 import { toQuality, type Quality } from "../types/brand.js";
 import {
   defaultAudioCodec,
   defaultVideoCodec,
   canCopyAudioInto,
   isCodecAllowedIn,
+  isImageSubtitle,
   isVideoContainer,
+  subtitleCodecFor,
   VIDEO_CONTAINERS,
   type AudioCodec,
   type VideoCodec,
@@ -312,8 +324,10 @@ async function executeJob(
     }
 
     const startedAt = performance.now();
-    const outputBytes =
+    const { bytes: outputBytes, warnings } =
       kind === "image" ? await runImageJob(job, ctx) : await runVideoJob(job, ctx);
+
+    const notes = warnings.length > 0 ? { warnings } : {};
 
     // `null` signals the encoder declined to write because it grew the file.
     if (outputBytes === null) {
@@ -324,6 +338,7 @@ async function executeJob(
         outputPath,
         inputBytes,
         reason: "output-larger-than-input",
+        ...notes,
       };
     }
 
@@ -338,6 +353,7 @@ async function executeJob(
       savedBytes,
       savedRatio: inputBytes > 0 ? savedBytes / inputBytes : 0,
       durationMs: performance.now() - startedAt,
+      ...notes,
     };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw err;
@@ -345,10 +361,16 @@ async function executeJob(
   }
 }
 
+/** `bytes: null` means the encoder declined to write because output grew. */
+interface JobOutput {
+  readonly bytes: number | null;
+  readonly warnings: string[];
+}
+
 async function runImageJob(
   job: CompressionJob,
   ctx: ExecuteContext,
-): Promise<number | null> {
+): Promise<JobOutput> {
   const encoded = await encodeImage({
     inputPath: job.inputPath,
     outputPath: job.outputPath,
@@ -359,16 +381,18 @@ async function runImageJob(
     keepMetadata: ctx.options.keepMetadata ?? false,
   });
 
-  if (ctx.skipLarger && encoded.bytes >= job.inputBytes) return null;
+  if (ctx.skipLarger && encoded.bytes >= job.inputBytes) {
+    return { bytes: null, warnings: [] };
+  }
 
   await encoded.write();
-  return encoded.bytes;
+  return { bytes: encoded.bytes, warnings: [] };
 }
 
 async function runVideoJob(
   job: CompressionJob,
   ctx: ExecuteContext,
-): Promise<number | null> {
+): Promise<JobOutput> {
   if (!ctx.tools) {
     throw new CompressorError(
       "FFMPEG_NOT_FOUND",
@@ -378,14 +402,19 @@ async function runVideoJob(
 
   const extension = job.targetFormat;
 
-  // One probe serves both the progress percentage and the audio decision.
-  const probe = ctx.tools.ffprobe
+  // One probe serves the progress percentage, the audio decision, and which
+  // streams survive.
+  const probe: MediaProbe = ctx.tools.ffprobe
     ? await probeMedia(ctx.tools.ffprobe, job.inputPath)
-    : { durationSeconds: null, audio: null };
+    : EMPTY_PROBE;
+
+  const plan = isVideoContainer(extension)
+    ? planStreams(extension, probe)
+    : { plan: openStreamPlan(probe), dropped: [] as string[] };
 
   const args = isVideoContainer(extension)
-    ? curatedArgsFor(extension, job, ctx, probe.audio)
-    : await openArgsFor(extension, job, ctx, probe.audio);
+    ? curatedArgsFor(extension, job, ctx, probe, plan.plan)
+    : await openArgsFor(extension, job, ctx, probe, plan.plan);
 
   const encoded = await encodeVideo({
     tools: ctx.tools,
@@ -404,9 +433,87 @@ async function runVideoJob(
 
   if (ctx.skipLarger && encoded.bytes >= job.inputBytes) {
     await rm(job.outputPath, { force: true }).catch(() => undefined);
-    return null;
+    return { bytes: null, warnings: plan.dropped };
   }
-  return encoded.bytes;
+  return { bytes: encoded.bytes, warnings: plan.dropped };
+}
+
+const EMPTY_PROBE: MediaProbe = {
+  durationSeconds: null,
+  video: [],
+  audio: [],
+  subtitles: [],
+  attachedPictures: [],
+  hasAttachments: false,
+};
+
+/**
+ * Decide which streams survive into a curated container.
+ *
+ * Anything that cannot be carried is reported rather than dropped in silence —
+ * losing a commentary track or a subtitle without a word is worse than
+ * refusing outright, because nobody notices until they need it.
+ */
+export function planStreams(
+  container: VideoContainer,
+  probe: MediaProbe,
+): { plan: StreamPlan; dropped: string[] } {
+  const dropped: string[] = [];
+
+  const subtitles: { index: number; codec: string }[] = [];
+  for (const sub of probe.subtitles) {
+    const codec = subtitleCodecFor(container, sub.codec);
+    if (codec === null) {
+      const kind = isImageSubtitle(sub.codec) ? "image-based " : "";
+      dropped.push(
+        `dropped ${kind}subtitle track${describeStream(sub)} — ` +
+          `${VIDEO_CONTAINERS[container].label} cannot carry ${sub.codec}`,
+      );
+      continue;
+    }
+    subtitles.push({ index: sub.index, codec });
+  }
+
+  for (const picture of probe.attachedPictures) {
+    dropped.push("dropped embedded cover art");
+    void picture;
+  }
+
+  return {
+    plan: {
+      video: probe.video.map((v) => v.index),
+      audio: probe.audio.map((a) => a.index),
+      subtitles,
+      // Fonts only travel in Matroska, and only matter alongside subtitles.
+      attachments: container === ".mkv" && probe.hasAttachments && subtitles.length > 0,
+    },
+    dropped,
+  };
+}
+
+/**
+ * Stream plan for an uncurated container.
+ *
+ * Video and audio are mapped, subtitles are left to ffmpeg's default handling:
+ * we have no compatibility table for a container discovered at runtime, and
+ * guessing wrong makes the whole mux fail rather than losing one track.
+ */
+function openStreamPlan(probe: MediaProbe): StreamPlan | null {
+  if (probe.video.length === 0 && probe.audio.length === 0) return null;
+  return {
+    video: probe.video.map((v) => v.index),
+    audio: probe.audio.map((a) => a.index),
+    subtitles: [],
+    attachments: false,
+  };
+}
+
+function describeStream(stream: {
+  language: string | null;
+  title: string | null;
+}): string {
+  const parts = [stream.language, stream.title].filter(Boolean);
+  return parts.length > 0 ? ` (${parts.join(": ")})` : "";
 }
 
 /** Curated container: typed codec matrix and tuned per-codec flags. */
@@ -414,10 +521,11 @@ function curatedArgsFor(
   container: VideoContainer,
   job: CompressionJob,
   ctx: ExecuteContext,
-  sourceAudio: SourceAudio,
+  probe: MediaProbe,
+  plan: StreamPlan | null,
 ): string[] {
   const videoCodec = resolveVideoCodec(container, ctx.options.videoCodec);
-  const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec, sourceAudio);
+  const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec, probe.audio);
 
   return curatedArgs({
     inputPath: job.inputPath,
@@ -430,7 +538,8 @@ function curatedArgsFor(
     speed: ctx.options.preset,
     fps: ctx.options.fps,
     resize: ctx.options.resize,
-    sourceAudioBitrate: sourceAudio?.bitrate ?? null,
+    sourceAudioBitrates: probe.audio.map((a) => a.bitrate),
+    streams: plan,
   });
 }
 
@@ -446,7 +555,8 @@ async function openArgsFor(
   extension: string,
   job: CompressionJob,
   ctx: ExecuteContext,
-  sourceAudio: SourceAudio,
+  probe: MediaProbe,
+  plan: StreamPlan | null,
 ): Promise<string[]> {
   const ffmpeg = ctx.tools?.ffmpeg ?? "ffmpeg";
   const muxer = extension.slice(1);
@@ -485,7 +595,8 @@ async function openArgsFor(
     speed: ctx.options.preset,
     fps: ctx.options.fps,
     resize: ctx.options.resize,
-    sourceAudioBitrate: sourceAudio?.bitrate ?? null,
+    sourceAudioBitrates: probe.audio.map((a) => a.bitrate),
+    streams: plan,
   });
 }
 
@@ -514,8 +625,11 @@ function resolveVideoCodec(
   return requested as VideoCodec;
 }
 
-/** What ffprobe found on the source's audio track, if it has one. */
-type SourceAudio = { readonly codec: string; readonly bitrate: number | null } | null;
+/** The source's audio streams, as ffprobe described them. */
+type SourceAudio = readonly {
+  readonly codec: string;
+  readonly bitrate: number | null;
+}[];
 
 /**
  * Pick an audio codec, preferring to copy the existing track.
@@ -529,10 +643,15 @@ type SourceAudio = { readonly codec: string; readonly bitrate: number | null } |
 function resolveAudioCodec(
   container: VideoContainer,
   requested: string | undefined,
-  sourceAudio: SourceAudio = null,
+  sourceAudio: SourceAudio = [],
 ): AudioCodec {
   if (requested === undefined) {
-    if (sourceAudio && canCopyAudioInto(container, sourceAudio.codec)) {
+    // Copy only when *every* track can be carried: `-c:a copy` is all-or-nothing,
+    // so one incompatible stream would fail the mux for all of them.
+    if (
+      sourceAudio.length > 0 &&
+      sourceAudio.every((a) => canCopyAudioInto(container, a.codec))
+    ) {
       return "copy";
     }
     return defaultAudioCodec(container);
@@ -541,10 +660,11 @@ function resolveAudioCodec(
   // `copy` is not an encoder, so it is not in the container's encoder list. It
   // is legal whenever the *source stream* is something the container accepts.
   if (requested === "copy") {
-    if (sourceAudio && !canCopyAudioInto(container, sourceAudio.codec)) {
+    const blocked = sourceAudio.find((a) => !canCopyAudioInto(container, a.codec));
+    if (blocked) {
       throw new CompressorError(
         "INVALID_OPTION",
-        `${VIDEO_CONTAINERS[container].label} cannot carry a ${sourceAudio.codec} stream, so its audio must be re-encoded.\n` +
+        `${VIDEO_CONTAINERS[container].label} cannot carry a ${blocked.codec} stream, so its audio must be re-encoded.\n` +
           `Drop --audio-codec copy, or choose one of: ${VIDEO_CONTAINERS[container].audio.filter((c) => c !== "copy").join(", ")}.`,
       );
     }

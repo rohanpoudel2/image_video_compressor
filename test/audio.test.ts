@@ -76,10 +76,10 @@ describe("audio bitrate never exceeds the source", () => {
       videoCodec: "libx264",
       audioCodec: "aac",
       quality: toQuality(45),
-      sourceAudioBitrate: 69_584,
+      sourceAudioBitrates: [69_584],
     });
 
-    const index = args.indexOf("-b:a");
+    const index = args.indexOf("-b:a:0");
     expect(index).toBeGreaterThan(-1);
     expect(args[index + 1]).toBe("70k");
   });
@@ -110,12 +110,12 @@ describe("copying audio instead of re-encoding it", () => {
       videoCodec: "libx264",
       audioCodec: "copy",
       quality: toQuality(45),
-      sourceAudioBitrate: 69_584,
+      sourceAudioBitrates: [69_584],
     });
 
     expect(args).toContain("-c:a");
     expect(args[args.indexOf("-c:a") + 1]).toBe("copy");
-    expect(args).not.toContain("-b:a");
+    expect(args.some((a) => a.startsWith("-b:a"))).toBe(false);
   });
 });
 
@@ -123,43 +123,44 @@ describe("ffprobe JSON parsing", () => {
   it("reads duration and the audio stream together", () => {
     const raw = JSON.stringify({
       streams: [
-        { codec_name: "h264", codec_type: "video", bit_rate: "8677" },
-        { codec_name: "aac", codec_type: "audio", bit_rate: "69584" },
+        { index: 0, codec_name: "h264", codec_type: "video", bit_rate: "8677" },
+        { index: 1, codec_name: "aac", codec_type: "audio", bit_rate: "69584" },
       ],
       format: { duration: "3.000000" },
     });
 
-    expect(parseProbe(raw)).toEqual({
-      durationSeconds: 3,
-      audio: { codec: "aac", bitrate: 69584 },
-    });
+    const probe = parseProbe(raw);
+    expect(probe.durationSeconds).toBe(3);
+    expect(probe.audio).toHaveLength(1);
+    expect(probe.audio[0]).toMatchObject({ codec: "aac", bitrate: 69584 });
+    expect(probe.video).toHaveLength(1);
   });
 
   it("reports no audio for a silent source", () => {
     const raw = JSON.stringify({
-      streams: [{ codec_name: "h264", codec_type: "video" }],
+      streams: [{ index: 0, codec_name: "h264", codec_type: "video" }],
       format: { duration: "10" },
     });
 
-    expect(parseProbe(raw).audio).toBeNull();
+    expect(parseProbe(raw).audio).toEqual([]);
     expect(parseProbe(raw).durationSeconds).toBe(10);
   });
 
   it("survives a missing bitrate field", () => {
     const raw = JSON.stringify({
-      streams: [{ codec_name: "opus", codec_type: "audio" }],
+      streams: [{ index: 0, codec_name: "opus", codec_type: "audio" }],
       format: {},
     });
 
-    expect(parseProbe(raw).audio).toEqual({ codec: "opus", bitrate: null });
+    expect(parseProbe(raw).audio[0]).toMatchObject({ codec: "opus", bitrate: null });
     expect(parseProbe(raw).durationSeconds).toBeNull();
   });
 
   it("returns empty rather than throwing on unparseable output", () => {
-    expect(parseProbe("not json at all")).toEqual({
-      durationSeconds: null,
-      audio: null,
-    });
+    const probe = parseProbe("not json at all");
+    expect(probe.durationSeconds).toBeNull();
+    expect(probe.audio).toEqual([]);
+    expect(probe.video).toEqual([]);
   });
 });
 
