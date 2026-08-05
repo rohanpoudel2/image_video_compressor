@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint & types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+
+  test:
+    name: Test — node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: [20, 22, 24]
+        include:
+          # sharp ships prebuilt binaries per platform and ffmpeg differs across
+          # them, so both other OSes get a run rather than trusting Linux alone.
+          - os: macos-latest
+            node: 22
+          - os: windows-latest
+            node: 22
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Video tests skip themselves when ffmpeg is absent, but we want them to
+      # actually run in CI — that is where the container/codec matrix is proven.
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - run: npm ci
+      - run: npm run build
+      - run: npx vitest run
+
+      - name: Confirm the video suite was not silently skipped
+        if: runner.os == 'Linux'
+        run: ffmpeg -version | head -1
+
+  package:
+    name: Verify published package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      # Catch packaging mistakes before a release, not after: v1 shipped its
+      # lockfile and had "main" pointing at the CLI.
+      - name: Inspect tarball contents
+        run: npm pack --dry-run
+
+      - name: The package must be importable as a library
+        run: |
+          npm pack
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/image-and-video-compressor-*.tgz
+          node -e "
+            const m = require('image-and-video-compressor');
+            if (typeof m.compressImages !== 'function') throw new Error('missing compressImages');
+            if (!m.VIDEO_CONTAINERS['.webm']) throw new Error('missing format registry');
+            if (m.VIDEO_CONTAINERS['.webm'].video.includes('libx264')) throw new Error('webm must not allow H.264');
+            console.log('CommonJS consumer OK');
+          "
+          node --input-type=module -e "
+            import { compressImages, toQuality } from 'image-and-video-compressor';
+            if (typeof compressImages !== 'function') throw new Error('missing ESM export');
+            if (toQuality(50) !== 50) throw new Error('branded constructor broken');
+            console.log('ESM consumer OK');
+          "

@@ -1,6 +1,18 @@
-node_modules
-/node_modules
-/optimised_images/
-/optimised_videos/
+node_modules/
+dist/
+coverage/
+
+# Packing/test scratch
+*.tgz
+.DS_Store
+
+# Default output directory produced by the tool itself
+compressed/
+
+# Legacy v1 output directories
+optimised_images/
+optimised_videos/
+
+# Local sample media
 /videos/
 /images/
