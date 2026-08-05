@@ -1,6 +1,6 @@
 {
   "name": "image-and-video-compressor",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Fast, type-safe image and video compression for Node.js — parallel by default, with a colorful CLI and machine-readable JSON output for AI agents.",
   "author": "Rohan Poudel",
   "license": "MIT",
