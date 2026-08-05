@@ -106,33 +106,33 @@ Paths can be files or directories, and your shell's globs work as usual. Output 
 
 ### Commands
 
-| Command                | What it does                                                       |
-| ---------------------- | ------------------------------------------------------------------ |
-| `imgvidcompress <paths...>` | Compress every image and video found. The default command.    |
-| `imgvidcompress image <paths...>` | Images only. Ignores video files entirely.              |
-| `imgvidcompress video <paths...>` | Videos only.                                            |
-| `imgvidcompress formats`   | Print this machine's real capabilities. Add `--json` for a machine-readable version. |
-| `imgvidcompress --help`    | Full usage, including per-command help such as `image --help`. |
+| Command                           | What it does                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------------ |
+| `imgvidcompress <paths...>`       | Compress every image and video found. The default command.                           |
+| `imgvidcompress image <paths...>` | Images only. Ignores video files entirely.                                           |
+| `imgvidcompress video <paths...>` | Videos only.                                                                         |
+| `imgvidcompress formats`          | Print this machine's real capabilities. Add `--json` for a machine-readable version. |
+| `imgvidcompress --help`           | Full usage, including per-command help such as `image --help`.                       |
 
 ### Options
 
 Shared by `run`, `image` and `video`:
 
-| Option                          | Default                | Description                                                    |
-| ------------------------------- | ---------------------- | -------------------------------------------------------------- |
-| `-q, --quality <1-100>`         | `75`                   | Higher is better looking. Mapped onto each codec's own scale.  |
-| `-t, --to <format>`             | `.webp` / `.mp4`       | Output format. Run `formats` to see what is available.<sup>†</sup> |
-| `-o, --out <dir>`               | `<source>/compressed`  | Output directory. Structure is mirrored under it.              |
-| `-r, --recursive`               | off                    | Descend into subdirectories.                                   |
-| `-c, --concurrency <n>`         | see below              | Files processed at once.                                       |
-| `--max-width <px>`              | —                      | Shrink anything wider. Never enlarges.                         |
-| `--max-height <px>`             | —                      | Shrink anything taller. Never enlarges.                        |
-| `--overwrite`                   | off                    | Replace existing output files instead of skipping them.        |
-| `--dry-run`                     | off                    | Report the plan, write nothing.                                |
-| `--json`                        | off                    | One JSON document on stdout; human output moves to stderr.     |
-| `--quiet`                       | off                    | Suppress all non-error output.                                 |
-| `--no-color`                    | —                      | Disable coloured output.                                       |
-| `--no-skip-larger`              | —                      | Write the output even when it ends up bigger than the source.  |
+| Option                  | Default               | Description                                                        |
+| ----------------------- | --------------------- | ------------------------------------------------------------------ |
+| `-q, --quality <1-100>` | `75`                  | Higher is better looking. Mapped onto each codec's own scale.      |
+| `-t, --to <format>`     | `.webp` / `.mp4`      | Output format. Run `formats` to see what is available.<sup>†</sup> |
+| `-o, --out <dir>`       | `<source>/compressed` | Output directory. Structure is mirrored under it.                  |
+| `-r, --recursive`       | off                   | Descend into subdirectories.                                       |
+| `-c, --concurrency <n>` | see below             | Files processed at once.                                           |
+| `--max-width <px>`      | —                     | Shrink anything wider. Never enlarges.                             |
+| `--max-height <px>`     | —                     | Shrink anything taller. Never enlarges.                            |
+| `--overwrite`           | off                   | Replace existing output files instead of skipping them.            |
+| `--dry-run`             | off                   | Report the plan, write nothing.                                    |
+| `--json`                | off                   | One JSON document on stdout; human output moves to stderr.         |
+| `--quiet`               | off                   | Suppress all non-error output.                                     |
+| `--no-color`            | —                     | Disable coloured output.                                           |
+| `--no-skip-larger`      | —                     | Write the output even when it ends up bigger than the source.      |
 
 <sup>†</sup> Images default to WebP, except that a source already in a modern format keeps it — an `.avif` input stays AVIF and a `.webp` input stays WebP rather than being pointlessly transcoded. Videos default to `.mp4`.
 
@@ -140,20 +140,20 @@ Concurrency defaults differ by media kind, because the two libraries behave diff
 
 **Image options**
 
-| Option              | Default | Description                                          |
-| ------------------- | ------- | ---------------------------------------------------- |
-| `--keep-metadata`   | off     | Preserve EXIF and ICC instead of stripping it.       |
-| `--no-auto-rotate`  | —       | Do not apply EXIF orientation.                       |
+| Option             | Default | Description                                    |
+| ------------------ | ------- | ---------------------------------------------- |
+| `--keep-metadata`  | off     | Preserve EXIF and ICC instead of stripping it. |
+| `--no-auto-rotate` | —       | Do not apply EXIF orientation.                 |
 
 **Video options**
 
-| Option                 | Default            | Description                                                 |
-| ---------------------- | ------------------ | ----------------------------------------------------------- |
-| `--codec <name>`       | per container      | `libx264`, `libx265`, `libvpx-vp9`, `libvpx`, `libsvtav1`, `libaom-av1`, `mpeg4`, `libtheora`. Must be legal for the container. |
-| `--audio-codec <name>` | per container      | `aac`, `libopus`, or `copy` to pass the original track through. |
-| `--fps <n>`            | source rate        | Cap the frame rate. Left alone by default.                  |
-| `--preset <name>`      | per codec          | Encoder speed/efficiency tradeoff. Codec-specific.          |
-| `--ffmpeg-path <path>` | `$FFMPEG_PATH`, then `PATH` | Path to the ffmpeg binary.                     |
+| Option                 | Default                     | Description                                                                                                                     |
+| ---------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `--codec <name>`       | per container               | `libx264`, `libx265`, `libvpx-vp9`, `libvpx`, `libsvtav1`, `libaom-av1`, `mpeg4`, `libtheora`. Must be legal for the container. |
+| `--audio-codec <name>` | per container               | `aac`, `libopus`, or `copy` to pass the original track through.                                                                 |
+| `--fps <n>`            | source rate                 | Cap the frame rate. Left alone by default.                                                                                      |
+| `--preset <name>`      | per codec                   | Encoder speed/efficiency tradeoff. Codec-specific.                                                                              |
+| `--ffmpeg-path <path>` | `$FFMPEG_PATH`, then `PATH` | Path to the ffmpeg binary.                                                                                                      |
 
 ### Examples
 
@@ -242,18 +242,18 @@ Ships as ESM and CommonJS with bundled type declarations. `require()` and `impor
 
 ### Functions
 
-| Function | Signature |
-| -------- | --------- |
-| `compress` | `(paths: string[], options?: CompressOptions) => Promise<CompressionReport>` — images and videos, auto-detected |
-| `compressImages` | `(paths: string[], options?: ImageOptions) => Promise<CompressionReport>` |
-| `compressVideos` | `(paths: string[], options?: VideoOptions) => Promise<CompressionReport>` |
-| `discoverFiles` | Walk paths and classify what is there, without compressing |
-| `imageCapabilities` | What this sharp build can genuinely read and write |
-| `ffmpegCapabilities` | Muxers, demuxers and encoders this ffmpeg reports |
-| `resolveFfmpeg` | Locate the ffmpeg binary and its version |
-| `probeMedia` | ffprobe a file into typed stream information |
-| `sniff` / `sniffFile` | Identify a file by content rather than name |
-| `toQuality` / `toPixels` | Validating constructors for the branded scalar types |
+| Function                 | Signature                                                                                                       |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `compress`               | `(paths: string[], options?: CompressOptions) => Promise<CompressionReport>` — images and videos, auto-detected |
+| `compressImages`         | `(paths: string[], options?: ImageOptions) => Promise<CompressionReport>`                                       |
+| `compressVideos`         | `(paths: string[], options?: VideoOptions) => Promise<CompressionReport>`                                       |
+| `discoverFiles`          | Walk paths and classify what is there, without compressing                                                      |
+| `imageCapabilities`      | What this sharp build can genuinely read and write                                                              |
+| `ffmpegCapabilities`     | Muxers, demuxers and encoders this ffmpeg reports                                                               |
+| `resolveFfmpeg`          | Locate the ffmpeg binary and its version                                                                        |
+| `probeMedia`             | ffprobe a file into typed stream information                                                                    |
+| `sniff` / `sniffFile`    | Identify a file by content rather than name                                                                     |
+| `toQuality` / `toPixels` | Validating constructors for the branded scalar types                                                            |
 
 The three compression functions **always resolve**. Per-file problems appear as `status: "failed"` inside `results`; only setup errors — no inputs, a bad option, ffmpeg missing — reject with a `CompressorError`.
 
@@ -263,18 +263,18 @@ Format registries (`VIDEO_CONTAINERS`, `VIDEO_CODECS`, `AUDIO_CODECS`, `CURATED_
 
 Shared by every entry point:
 
-| Option        | Type                            | Default               |
-| ------------- | ------------------------------- | --------------------- |
-| `quality`     | `Quality`                       | `75`                  |
-| `outDir`      | `string`                        | `<source>/compressed` |
-| `recursive`   | `boolean`                       | `false`               |
-| `concurrency` | `number`                        | per media kind        |
-| `overwrite`   | `boolean`                       | `false`               |
-| `dryRun`      | `boolean`                       | `false`               |
-| `skipLarger`  | `boolean`                       | `true`                |
-| `resize`      | `ResizeOptions`                 | —                     |
-| `signal`      | `AbortSignal`                   | —                     |
-| `onProgress`  | `(event: ProgressEvent) => void` | —                    |
+| Option        | Type                             | Default               |
+| ------------- | -------------------------------- | --------------------- |
+| `quality`     | `Quality`                        | `75`                  |
+| `outDir`      | `string`                         | `<source>/compressed` |
+| `recursive`   | `boolean`                        | `false`               |
+| `concurrency` | `number`                         | per media kind        |
+| `overwrite`   | `boolean`                        | `false`               |
+| `dryRun`      | `boolean`                        | `false`               |
+| `skipLarger`  | `boolean`                        | `true`                |
+| `resize`      | `ResizeOptions`                  | —                     |
+| `signal`      | `AbortSignal`                    | —                     |
+| `onProgress`  | `(event: ProgressEvent) => void` | —                     |
 
 `ImageOptions` adds `to`, `autoRotate` (default `true`) and `keepMetadata` (default `false`).
 `VideoOptions` adds `to`, `videoCodec`, `audioCodec`, `fps`, `preset` and `ffmpegPath`.
@@ -286,11 +286,20 @@ Every file produces one entry in a discriminated union, so a run always yields a
 
 ```ts
 type JobResult =
-  | { status: "compressed"; inputPath; outputPath; inputBytes; outputBytes;
-      savedBytes; savedRatio; durationMs; warnings? }
-  | { status: "skipped";    inputPath; outputPath; inputBytes; reason; warnings? }
-  | { status: "failed";     inputPath; outputPath; error: { code; message; detail? } };
+  | ({ status: "compressed" } & CompressedResult)
+  | ({ status: "skipped" } & SkippedResult)
+  | ({ status: "failed" } & FailedResult);
 ```
+
+All three carry `kind`, `inputPath` and `outputPath`. Beyond that:
+
+| Status         | Additional fields                                                                  |
+| -------------- | ---------------------------------------------------------------------------------- |
+| `"compressed"` | `inputBytes`, `outputBytes`, `savedBytes`, `savedRatio`, `durationMs`, `warnings?` |
+| `"skipped"`    | `inputBytes`, `reason`, `warnings?`                                                |
+| `"failed"`     | `error: { code, message, detail? }`                                                |
+
+`savedBytes` is positive when space was saved and negative if the output grew. `savedRatio` is the fraction of the original removed, 0-1.
 
 `isCompressed`, `isSkipped` and `isFailed` are exported as type guards, so consumers never hand-check `status`:
 
@@ -298,7 +307,8 @@ type JobResult =
 import { isFailed, isCompressed } from "image-and-video-compressor";
 
 const failures = report.results.filter(isFailed);
-const bytes = report.results.filter(isCompressed)
+const bytes = report.results
+  .filter(isCompressed)
   .reduce((sum, r) => sum + r.savedBytes, 0);
 ```
 
@@ -314,10 +324,17 @@ await compress(["./assets"], {
   signal: controller.signal,
   onProgress: (event) => {
     switch (event.type) {
-      case "run-start":    console.log(`${event.total} files`); break;
-      case "job-start":    break;
-      case "job-progress": console.log(event.job.inputPath, event.ratio); break;
-      case "job-done":     console.log(event.result.status); break;
+      case "run-start":
+        console.log(`${event.total} files`);
+        break;
+      case "job-start":
+        break;
+      case "job-progress":
+        console.log(event.job.inputPath, event.ratio);
+        break;
+      case "job-done":
+        console.log(event.result.status);
+        break;
     }
   },
 });
@@ -330,7 +347,7 @@ await compress(["./assets"], {
 Quality and pixel values go through `toQuality()` and `toPixels()`, which validate the range and return branded types. A raw `number` will not typecheck:
 
 ```ts
-compressImages(["./photos"], { quality: 80 });            // ✗ compile error
+compressImages(["./photos"], { quality: 80 }); // ✗ compile error
 compressImages(["./photos"], { quality: toQuality(80) }); // ✓
 ```
 
@@ -388,13 +405,13 @@ imgvidcompress formats --json | jq '.video.curated[].extension'
 
 ### Exit codes
 
-| Code | Meaning                                                    |
-| ---- | ---------------------------------------------------------- |
-| `0`  | Everything succeeded                                       |
-| `1`  | The run completed but some files failed                    |
+| Code | Meaning                                                     |
+| ---- | ----------------------------------------------------------- |
+| `0`  | Everything succeeded                                        |
+| `1`  | The run completed but some files failed                     |
 | `2`  | Bad usage — unknown flag, invalid format, colliding outputs |
-| `3`  | ffmpeg not found                                           |
-| `4`  | No matching input files                                    |
+| `3`  | ffmpeg not found                                            |
+| `4`  | No matching input files                                     |
 
 ### Error codes
 
