@@ -64,6 +64,7 @@ That is the whole quick start. No install, no config file, no flags.
   - [Progress and cancellation](#progress-and-cancellation)
   - [Branded types](#branded-types)
 - [Automation and AI agents](#automation-and-ai-agents)
+  - [MCP server](#mcp-server)
   - [JSON output contract](#json-output-contract)
   - [Exit codes](#exit-codes)
   - [Error codes](#error-codes)
@@ -356,6 +357,20 @@ This is what stops a 1-100 quality value being fed to a flag that expects a 0-51
 ## Automation and AI agents
 
 The tool is built to be driven by something that is not a person: a build script, a CI job, or a coding agent.
+
+### MCP server
+
+There is an MCP server, so an agent can compress media directly instead of being told a command to run:
+
+```bash
+claude mcp add image-video-compressor -- npx -y image-and-video-compressor-mcp
+```
+
+Five tools over stdio: `compress_media` (every option the library takes), `discover_media`, `probe_media`, `list_capabilities` and `plan_video_conversion`.
+
+Two of those exist because agents guess badly without them. `list_capabilities` reports what the local sharp and ffmpeg builds genuinely support, so a format is chosen rather than assumed. `plan_video_conversion` says which streams a target container would drop — the answer to "will this lose my subtitles" before a file is written.
+
+Published separately as [`image-and-video-compressor-mcp`](https://www.npmjs.com/package/image-and-video-compressor-mcp) to keep the MCP SDK's dependency tree out of this package. Details in [mcp/README.md](./mcp/README.md).
 
 ### JSON output contract
 

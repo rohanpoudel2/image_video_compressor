@@ -1,0 +1,55 @@
+{
+  "name": "image-and-video-compressor-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for image-and-video-compressor — lets coding agents compress images and videos, probe media, and discover what the local ffmpeg and sharp builds actually support.",
+  "author": "Rohan Poudel",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "image-compression",
+    "video-compression",
+    "ffmpeg",
+    "sharp",
+    "ai-agent",
+    "claude",
+    "llm"
+  ],
+  "bin": {
+    "image-and-video-compressor-mcp": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "image-and-video-compressor": "^2.0.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.7.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rohanpoudel2/image_video_compressor.git",
+    "directory": "mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/rohanpoudel2/image_video_compressor/issues"
+  },
+  "homepage": "https://github.com/rohanpoudel2/image_video_compressor/tree/main/mcp#readme"
+}
