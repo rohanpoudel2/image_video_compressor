@@ -16,3 +16,6 @@ optimised_videos/
 # Local sample media
 /videos/
 /images/
+
+# Local demo media — ~14MB of binaries, regenerate with `npm run samples`
+samples/

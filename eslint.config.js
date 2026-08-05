@@ -6,10 +6,18 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
-    // This file is not part of the TS program, so type-aware rules cannot run
-    // on it and would otherwise fail with "not found by the project service".
-    files: ["eslint.config.js"],
+    // These are not part of the TS program, so type-aware rules cannot run on
+    // them and would otherwise fail with "not found by the project service".
+    files: ["eslint.config.js", "scripts/**/*.mjs"],
     ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        Buffer: "readonly",
+        fetch: "readonly",
+      },
+    },
   },
   {
     files: ["**/*.ts"],

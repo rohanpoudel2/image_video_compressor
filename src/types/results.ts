@@ -1,5 +1,10 @@
 import type { ImageOutputFormat } from "./image-formats.js";
-import type { VideoContainer, VideoCodec, AudioCodec } from "./video-formats.js";
+import type {
+  VideoContainer,
+  VideoOutputSpec,
+  VideoCodec,
+  AudioCodec,
+} from "./video-formats.js";
 import type { Pixels, Quality } from "./brand.js";
 
 export type MediaKind = "image" | "video";
@@ -163,7 +168,11 @@ export interface ImageOptions extends CommonOptions, ImageTuning {
 }
 
 export interface VideoOptions extends CommonOptions, VideoTuning {
-  readonly to?: VideoContainer;
+  /**
+   * Any container ffmpeg can mux. Curated ones are offered as autocomplete
+   * suggestions; the value is validated against the local binary at run time.
+   */
+  readonly to?: VideoOutputSpec;
 }
 
 /**
@@ -179,6 +188,12 @@ export interface CompressOptions extends CommonOptions, ImageTuning, VideoTuning
 }
 
 export type ProgressEvent =
+  /**
+   * Emitted once, after discovery and planning, before any encoding starts.
+   * The total is not knowable until then, which is why it arrives as an event
+   * rather than as a constructor argument to the renderer.
+   */
+  | { readonly type: "run-start"; readonly total: number }
   | { readonly type: "job-start"; readonly job: CompressionJob }
   | {
       readonly type: "job-progress";

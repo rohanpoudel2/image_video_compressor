@@ -4,8 +4,12 @@ import { runFfmpeg, probeDuration, type FfmpegTools } from "./ffmpeg.js";
 import { CompressorError } from "../core/errors.js";
 import {
   VIDEO_CODECS,
+  codecSpec,
+  isKnownVideoCodec,
+  mapQuality,
   qualityToCrf,
   type AudioCodecFor,
+  type QualityModel,
   type VideoCodec,
   type VideoCodecFor,
   type VideoContainer,
@@ -13,19 +17,96 @@ import {
 import type { Crf, Quality } from "../types/brand.js";
 import type { ResizeOptions } from "../types/results.js";
 
-/**
- * Default encoder speed per codec.
- *
- * These are not interchangeable strings: x264/x265 take named presets, SVT-AV1
- * takes a number 0-13, and VP9 uses `-cpu-used` entirely. v1 passed
- * `-preset fast` to everything, which is meaningless for two of the four.
- */
-const DEFAULT_SPEED = {
-  libx264: "medium",
-  libx265: "medium",
-  libsvtav1: "8",
-  "libvpx-vp9": "2",
-} as const satisfies Record<VideoCodec, string>;
+/** The generic argument builder both tiers delegate to. */
+interface RawArgsParams {
+  readonly inputPath: string;
+  readonly outputPath: string;
+  /** `null` lets ffmpeg pick the muxer's own default encoder. */
+  readonly videoCodec: string | null;
+  readonly audioCodec: string | null;
+  /** `null` when we have no quality model for the chosen encoder. */
+  readonly quality: { readonly flag: string; readonly value: number } | null;
+  readonly extraVideoFlags: readonly string[];
+  readonly audioBitrate: string | null;
+  readonly fps: number | undefined;
+  readonly resize: ResizeOptions | undefined;
+  readonly faststart: boolean;
+}
+
+function buildRawArgs(params: RawArgsParams): string[] {
+  const args: string[] = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    // Without -nostdin ffmpeg consumes the parent's stdin inside a pipeline;
+    // without -y it blocks forever on an overwrite prompt when there is no TTY.
+    "-nostdin",
+    "-y",
+    "-i",
+    params.inputPath,
+    "-progress",
+    "pipe:1",
+  ];
+
+  if (params.videoCodec) args.push("-c:v", params.videoCodec);
+  if (params.quality) args.push(params.quality.flag, String(params.quality.value));
+  args.push(...params.extraVideoFlags);
+
+  const filter = buildScaleFilter(params.resize);
+  if (filter) args.push("-vf", filter);
+
+  // Only cap the frame rate when explicitly asked. v1 hardcoded `.fps(30)`,
+  // which judders 24fps film and throws away half of 60fps footage.
+  if (params.fps !== undefined) args.push("-r", String(params.fps));
+
+  if (params.audioCodec) {
+    args.push("-c:a", params.audioCodec);
+    if (params.audioCodec !== "copy" && params.audioBitrate) {
+      args.push("-b:a", params.audioBitrate);
+    }
+  }
+
+  // Move the index to the front so playback can begin before the file finishes
+  // downloading. Meaningless for Matroska/WebM, which are already streamable.
+  if (params.faststart) args.push("-movflags", "+faststart");
+
+  args.push(params.outputPath);
+  return args;
+}
+
+/** Encoder flags beyond the quality setting, per codec. */
+function videoFlagsFor(codec: VideoCodec, speed: string | undefined): string[] {
+  const spec = codecSpec(codec);
+  const flags: string[] = [];
+
+  if (codec === "libvpx-vp9" || codec === "libvpx") {
+    // Without `-b:v 0` libvpx treats -crf as a ceiling on top of a default
+    // bitrate rather than as constant quality, and the file comes out far
+    // larger than asked for. This flag is not optional.
+    flags.push("-b:v", "0", "-row-mt", "1");
+  }
+
+  if (spec.speedFlag) {
+    const value = speed ?? spec.defaultSpeed;
+    if (value) flags.push(spec.speedFlag, value);
+  }
+
+  // 8-bit 4:2:0 is the only combination every player handles.
+  if (["libx264", "libx265", "libsvtav1", "libaom-av1"].includes(codec)) {
+    flags.push("-pix_fmt", "yuv420p");
+  }
+  // Signal HEVC as hvc1 so QuickTime and Safari will play the result.
+  if (codec === "libx265") flags.push("-tag:v", "hvc1");
+
+  return flags;
+}
+
+const AUDIO_BITRATES: Record<string, string> = {
+  aac: "128k",
+  libopus: "96k",
+  libmp3lame: "192k",
+  libvorbis: "128k",
+};
 
 export interface BuildVideoArgsParams<C extends VideoContainer> {
   readonly inputPath: string;
@@ -41,7 +122,7 @@ export interface BuildVideoArgsParams<C extends VideoContainer> {
 }
 
 /**
- * Build the ffmpeg argument vector for one encode.
+ * Build ffmpeg arguments for a curated container.
  *
  * Generic over the container, so the compiler rejects
  * `buildVideoArgs({ container: ".webm", videoCodec: "libx264" })` — the exact
@@ -51,72 +132,65 @@ export interface BuildVideoArgsParams<C extends VideoContainer> {
 export function buildVideoArgs<C extends VideoContainer>(
   params: BuildVideoArgsParams<C>,
 ): string[] {
-  const { container, crf, resize, fps } = params;
-  const videoCodec = params.videoCodec;
+  const codec = params.videoCodec;
   const audioCodec = params.audioCodec as string;
-  const speed = params.speed ?? DEFAULT_SPEED[videoCodec];
 
-  const args: string[] = [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-nostdin",
-    "-y",
-    "-i",
-    params.inputPath,
-    "-progress",
-    "pipe:1",
-    "-c:v",
-    videoCodec,
-    "-crf",
-    String(crf),
-  ];
+  return buildRawArgs({
+    inputPath: params.inputPath,
+    outputPath: params.outputPath,
+    videoCodec: codec,
+    audioCodec,
+    quality: { flag: VIDEO_CODECS[codec].quality.flag, value: params.crf },
+    extraVideoFlags: videoFlagsFor(codec, params.speed),
+    audioBitrate: AUDIO_BITRATES[audioCodec] ?? null,
+    fps: params.fps,
+    resize: params.resize,
+    faststart: params.container === ".mp4" || params.container === ".mov",
+  });
+}
 
-  switch (videoCodec) {
-    case "libx264":
-    case "libx265":
-      args.push("-preset", speed);
-      // 8-bit 4:2:0 is the only combination every player handles.
-      args.push("-pix_fmt", "yuv420p");
-      // Signal HEVC as hvc1 so QuickTime and Safari will play the result.
-      if (videoCodec === "libx265") args.push("-tag:v", "hvc1");
-      break;
-    case "libsvtav1":
-      args.push("-preset", speed);
-      args.push("-pix_fmt", "yuv420p");
-      break;
-    case "libvpx-vp9":
-      // Without `-b:v 0` libvpx treats -crf as a ceiling on top of a default
-      // bitrate rather than as constant quality, and the file comes out far
-      // larger than asked for. This flag is not optional.
-      args.push("-b:v", "0");
-      args.push("-cpu-used", speed);
-      args.push("-row-mt", "1");
-      break;
-  }
+export interface BuildOpenVideoArgsParams {
+  readonly inputPath: string;
+  readonly outputPath: string;
+  /** Extension of a container outside the curated matrix. */
+  readonly extension: string;
+  /** `null` hands the choice to ffmpeg's own muxer default. */
+  readonly videoCodec: string | null;
+  readonly audioCodec: string | null;
+  readonly quality: Quality;
+  readonly speed?: string | undefined;
+  readonly fps?: number | undefined;
+  readonly resize?: ResizeOptions | undefined;
+}
 
-  const filter = buildScaleFilter(resize);
-  if (filter) args.push("-vf", filter);
+/**
+ * Build arguments for any container ffmpeg can mux.
+ *
+ * There is no compile-time guarantee here — there cannot be, for a set
+ * discovered from the binary at runtime. Safety comes from deferring instead:
+ * when the codec is unknown nothing is forced, and ffmpeg applies the muxer's
+ * own defaults, which are correct by construction.
+ */
+export function buildOpenVideoArgs(params: BuildOpenVideoArgsParams): string[] {
+  const codec = params.videoCodec;
+  const known = codec !== null && isKnownVideoCodec(codec);
+  const model: QualityModel | null = known ? VIDEO_CODECS[codec].quality : null;
 
-  // Only cap the frame rate when explicitly asked. v1 hardcoded `.fps(30)`,
-  // which judders 24fps film and throws away half of 60fps footage.
-  if (fps !== undefined) args.push("-r", String(fps));
-
-  if (audioCodec === "copy") {
-    args.push("-c:a", "copy");
-  } else {
-    args.push("-c:a", audioCodec);
-    args.push("-b:a", audioCodec === "libopus" ? "96k" : "128k");
-  }
-
-  // Move the index to the front so the file can start playing before it fully
-  // downloads. Meaningless for Matroska/WebM, which are already streamable.
-  if (container === ".mp4" || container === ".mov") {
-    args.push("-movflags", "+faststart");
-  }
-
-  args.push(params.outputPath);
-  return args;
+  return buildRawArgs({
+    inputPath: params.inputPath,
+    outputPath: params.outputPath,
+    videoCodec: codec,
+    audioCodec: params.audioCodec,
+    quality: model
+      ? { flag: model.flag, value: mapQuality(params.quality, model) }
+      : null,
+    extraVideoFlags: known ? videoFlagsFor(codec, params.speed) : [],
+    audioBitrate:
+      params.audioCodec === null ? null : (AUDIO_BITRATES[params.audioCodec] ?? null),
+    fps: params.fps,
+    resize: params.resize,
+    faststart: [".mp4", ".mov", ".m4v"].includes(params.extension),
+  });
 }
 
 /**
@@ -138,17 +212,71 @@ export function buildScaleFilter(resize?: ResizeOptions): string | null {
   return `scale=w=-2:h=min(ih\\,${h})`;
 }
 
-export interface EncodeVideoParams<C extends VideoContainer> {
+/** Curated path: validates the speed knob and maps quality onto the codec's CRF. */
+export function curatedArgs<C extends VideoContainer>(params: {
+  inputPath: string;
+  outputPath: string;
+  container: C;
+  videoCodec: VideoCodecFor<C>;
+  audioCodec: AudioCodecFor<C>;
+  quality: Quality;
+  speed?: string | undefined;
+  fps?: number | undefined;
+  resize?: ResizeOptions | undefined;
+}): string[] {
+  const codec = params.videoCodec;
+  validateSpeed(codec, params.speed);
+
+  return buildVideoArgs({
+    inputPath: params.inputPath,
+    outputPath: params.outputPath,
+    container: params.container,
+    videoCodec: params.videoCodec,
+    audioCodec: params.audioCodec,
+    crf: qualityToCrf(params.quality, codec),
+    speed: params.speed,
+    fps: params.fps,
+    resize: params.resize,
+  });
+}
+
+export function validateSpeed(codec: VideoCodec, speed: string | undefined): void {
+  if (speed === undefined) return;
+  const spec = codecSpec(codec);
+
+  if (spec.speedFlag === null) {
+    throw new CompressorError(
+      "INVALID_OPTION",
+      `${spec.label} has no speed preset; drop --preset.`,
+    );
+  }
+
+  if (spec.namedPresets) {
+    if (!spec.namedPresets.includes(speed)) {
+      throw new CompressorError(
+        "INVALID_OPTION",
+        `--preset for ${spec.label} must be one of: ${spec.namedPresets.join(", ")}`,
+      );
+    }
+    return;
+  }
+
+  const numeric = Number(speed);
+  const max = spec.numericSpeedMax ?? 8;
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > max) {
+    throw new CompressorError(
+      "INVALID_OPTION",
+      `--preset for ${spec.label} must be a whole number from 0 to ${max}.`,
+    );
+  }
+}
+
+export interface EncodeVideoParams {
   readonly tools: FfmpegTools;
   readonly inputPath: string;
   readonly outputPath: string;
-  readonly container: C;
-  readonly videoCodec: VideoCodecFor<C>;
-  readonly audioCodec: AudioCodecFor<C>;
-  readonly quality: Quality;
-  readonly speed?: string | undefined;
-  readonly fps?: number | undefined;
-  readonly resize?: ResizeOptions | undefined;
+  /** Pre-built argument vector from one of the builders above. */
+  readonly args: readonly string[];
   readonly onProgress?: ((ratio: number) => void) | undefined;
   readonly signal?: AbortSignal | undefined;
 }
@@ -157,35 +285,20 @@ export interface EncodeVideoResult {
   readonly bytes: number;
 }
 
-/** Encode one video, cleaning up the partial file if anything goes wrong. */
-export async function encodeVideo<C extends VideoContainer>(
-  params: EncodeVideoParams<C>,
+/** Run one encode, cleaning up the partial file if anything goes wrong. */
+export async function encodeVideo(
+  params: EncodeVideoParams,
 ): Promise<EncodeVideoResult> {
   const { tools, inputPath, outputPath } = params;
-
-  const crf = qualityToCrf(params.quality, params.videoCodec);
-  validateSpeed(params.videoCodec, params.speed);
 
   await mkdir(dirname(outputPath), { recursive: true });
 
   const duration = tools.ffprobe ? await probeDuration(tools.ffprobe, inputPath) : null;
 
-  const args = buildVideoArgs({
-    inputPath,
-    outputPath,
-    container: params.container,
-    videoCodec: params.videoCodec,
-    audioCodec: params.audioCodec,
-    crf,
-    speed: params.speed,
-    fps: params.fps,
-    resize: params.resize,
-  });
-
   try {
     await runFfmpeg({
       ffmpeg: tools.ffmpeg,
-      args,
+      args: params.args,
       durationSeconds: duration,
       ...(params.onProgress ? { onProgress: params.onProgress } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
@@ -198,40 +311,4 @@ export async function encodeVideo<C extends VideoContainer>(
 
   const info = await stat(outputPath);
   return { bytes: info.size };
-}
-
-function validateSpeed(codec: VideoCodec, speed: string | undefined): void {
-  if (speed === undefined) return;
-
-  const named = [
-    "ultrafast",
-    "superfast",
-    "veryfast",
-    "faster",
-    "fast",
-    "medium",
-    "slow",
-    "slower",
-    "veryslow",
-    "placebo",
-  ];
-
-  if (codec === "libx264" || codec === "libx265") {
-    if (!named.includes(speed)) {
-      throw new CompressorError(
-        "INVALID_OPTION",
-        `--preset for ${VIDEO_CODECS[codec].label} must be one of: ${named.join(", ")}`,
-      );
-    }
-    return;
-  }
-
-  const numeric = Number(speed);
-  const max = codec === "libsvtav1" ? 13 : 8;
-  if (!Number.isInteger(numeric) || numeric < 0 || numeric > max) {
-    throw new CompressorError(
-      "INVALID_OPTION",
-      `--preset for ${VIDEO_CODECS[codec].label} must be a whole number from 0 to ${max}.`,
-    );
-  }
 }

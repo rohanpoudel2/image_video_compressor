@@ -82,18 +82,29 @@ describe("CLI", () => {
       expect(result.exitCode).toBe(4);
     });
 
-    it("describes its own capabilities for a caller to discover", async () => {
+    it("describes this build's real capabilities for a caller to discover", async () => {
       const result = await runCli(["formats", "--json"]);
       const parsed = JSON.parse(result.stdout) as {
-        image: { output: string[]; input: string[] };
-        video: { output: { extension: string; videoCodecs: string[] }[] };
+        image: { read: string[]; write: { extensions: string[] }[] };
+        video: {
+          available: boolean;
+          curated: { extension: string; videoCodecs: string[] }[];
+          videoEncoders: string[];
+        };
       };
 
-      expect(parsed.image.output).not.toContain(".svg");
-      expect(parsed.image.input).toContain(".svg");
+      const writable = parsed.image.write.flatMap((w) => w.extensions);
+      // SVG decodes but has no encoder, on every build.
+      expect(writable).not.toContain(".svg");
+      expect(parsed.image.read).toContain(".svg");
+      expect(writable).toContain(".webp");
 
-      const webm = parsed.video.output.find((c) => c.extension === ".webm");
-      expect(webm?.videoCodecs).not.toContain("libx264");
+      if (parsed.video.available) {
+        const webm = parsed.video.curated.find((c) => c.extension === ".webm");
+        expect(webm?.videoCodecs).not.toContain("libx264");
+        // Reported from `ffmpeg -encoders`, so it reflects the real binary.
+        expect(parsed.video.videoEncoders.length).toBeGreaterThan(5);
+      }
     });
   });
 

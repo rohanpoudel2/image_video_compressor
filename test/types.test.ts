@@ -8,7 +8,7 @@ import {
   type VideoCodecFor,
   type VideoContainer,
 } from "../src/types/video-formats.js";
-import { IMAGE_FORMATS, isImageOutputFormat } from "../src/types/image-formats.js";
+import { imageCapabilities } from "../src/codecs/sharp-capabilities.js";
 import { toQuality, toPixels, RangeValidationError } from "../src/types/brand.js";
 
 /**
@@ -67,10 +67,11 @@ describe("runtime matrix agrees with the types", () => {
     expect(isCodecAllowedIn(".mp4", "libvpx-vp9")).toBe(false);
   });
 
-  it("does not advertise an image output format sharp cannot write", () => {
+  it("does not advertise an image output format sharp cannot write", async () => {
     // .svg is readable but never writable; it must not appear as an output.
-    expect(isImageOutputFormat(".svg")).toBe(false);
-    expect(Object.keys(IMAGE_FORMATS)).not.toContain(".svg");
+    const caps = await imageCapabilities();
+    expect(caps.writableByExtension.has(".svg")).toBe(false);
+    expect(caps.readableExtensions.has(".svg")).toBe(true);
   });
 });
 

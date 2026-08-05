@@ -48,7 +48,7 @@ export class Renderer {
 
   start(total: number): void {
     this.total = total;
-    if (!this.isTty) return;
+    if (!this.isTty || this.timer) return;
     // Repaint on a timer so video progress advances even between ffmpeg ticks.
     this.timer = setInterval(() => this.paint(), 100);
     this.timer.unref();
@@ -58,6 +58,9 @@ export class Renderer {
     if (this.quiet) return;
 
     switch (event.type) {
+      case "run-start":
+        this.start(event.total);
+        break;
       case "job-start":
         this.active.set(event.job.inputPath, { job: event.job, ratio: 0 });
         break;
@@ -122,9 +125,11 @@ export class Renderer {
     const { summary, results } = report;
 
     // Without a TTY each file was already printed as it finished, so repeating
-    // the list here would just double every line in the log.
+    // the list here would just double every line in the log. Skipped files are
+    // included: "1 skipped" with no indication of which file, or why, is the
+    // kind of summary that sends someone hunting through the output directory.
     const rows = this.isTty
-      ? results.filter((r) => r.status !== "skipped" || report.dryRun)
+      ? results
       : results.filter((r) => r.status === "skipped" && report.dryRun);
 
     if (rows.length > 0) this.write("\n");

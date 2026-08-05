@@ -1,14 +1,13 @@
-import {
-  IMAGE_FORMATS,
-  IMAGE_INPUT_FORMATS,
-  IMAGE_OUTPUT_FORMATS,
-} from "../types/image-formats.js";
+import { imageCapabilities } from "../codecs/sharp-capabilities.js";
+import { ffmpegCapabilities, muxerDetail } from "../codecs/ffmpeg-capabilities.js";
+import { resolveFfmpeg } from "../codecs/ffmpeg.js";
 import {
   VIDEO_CONTAINERS,
   VIDEO_CODECS,
   AUDIO_CODECS,
-  VIDEO_INPUT_FORMATS,
+  COMMON_VIDEO_EXTENSIONS,
 } from "../types/video-formats.js";
+import { IMAGE_INPUT_ONLY_FORMATS } from "../types/image-formats.js";
 import type { CompressionReport, ErrorCode } from "../types/results.js";
 
 /**
@@ -62,35 +61,126 @@ export function emitError(code: ErrorCode, message: string, detail?: string): vo
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+export interface CapabilityReport {
+  readonly schemaVersion: typeof SCHEMA_VERSION;
+  readonly image: {
+    readonly read: readonly string[];
+    readonly write: readonly {
+      extensions: readonly string[];
+      label: string;
+      supportsQuality: boolean;
+      supportsAnimation: boolean;
+    }[];
+    readonly readOnly: readonly string[];
+  };
+  readonly video: {
+    readonly available: boolean;
+    readonly ffmpeg: string | null;
+    readonly ffmpegVersion: string | null;
+    readonly curated: readonly {
+      extension: string;
+      label: string;
+      videoCodecs: readonly string[];
+      audioCodecs: readonly string[];
+    }[];
+    readonly muxerCount: number;
+    readonly demuxerCount: number;
+    readonly videoEncoders: readonly string[];
+    readonly audioEncoders: readonly string[];
+    readonly commonInputExtensions: readonly string[];
+  };
+}
+
 /**
- * Capability listing.
+ * Report what this installation can actually do.
  *
- * Lets a caller discover what this build actually supports rather than
- * hardcoding a format list that may drift — including the input/output
- * asymmetry (SVG and HEIC decode, but never encode) that v1 got wrong.
+ * Every number here is read from the running sharp and ffmpeg rather than from
+ * a list in the source, because both are build-dependent: JP2, JXL and HEIC are
+ * routinely missing from sharp, and a minimal ffmpeg carries a fraction of the
+ * muxers a Homebrew one does. A caller — human or agent — can discover the real
+ * constraints instead of hardcoding assumptions that are wrong on some machines.
  */
-export function emitFormats(): void {
-  const payload = {
+export async function collectCapabilities(
+  ffmpegPath?: string,
+): Promise<CapabilityReport> {
+  const images = await imageCapabilities();
+
+  let video: CapabilityReport["video"] = {
+    available: false,
+    ffmpeg: null,
+    ffmpegVersion: null,
+    curated: [],
+    muxerCount: 0,
+    demuxerCount: 0,
+    videoEncoders: [],
+    audioEncoders: [],
+    commonInputExtensions: [...COMMON_VIDEO_EXTENSIONS],
+  };
+
+  try {
+    const tools = await resolveFfmpeg(ffmpegPath);
+    const caps = await ffmpegCapabilities(tools.ffmpeg);
+
+    // Only advertise a curated container if the binary really has its muxer.
+    const curated = await Promise.all(
+      Object.entries(VIDEO_CONTAINERS).map(async ([ext, spec]) => {
+        const present =
+          caps.muxers.has(spec.muxer) ||
+          (await muxerDetail(tools.ffmpeg, spec.muxer)) !== null;
+        return present
+          ? {
+              extension: ext,
+              label: spec.label,
+              videoCodecs: spec.video.filter((c) => caps.videoEncoders.has(c)),
+              audioCodecs: spec.audio.filter(
+                (c) => c === "copy" || caps.audioEncoders.has(c),
+              ),
+            }
+          : null;
+      }),
+    );
+
+    video = {
+      available: true,
+      ffmpeg: tools.ffmpeg,
+      ffmpegVersion: tools.version,
+      curated: curated.filter((c) => c !== null),
+      muxerCount: caps.muxers.size,
+      demuxerCount: caps.demuxers.size,
+      videoEncoders: [...caps.videoEncoders].sort(),
+      audioEncoders: [...caps.audioEncoders].sort(),
+      commonInputExtensions: [...COMMON_VIDEO_EXTENSIONS],
+    };
+  } catch {
+    // ffmpeg absent: images still work, so this is a partial report, not a failure.
+  }
+
+  return {
     schemaVersion: SCHEMA_VERSION,
     image: {
-      input: IMAGE_INPUT_FORMATS,
-      output: IMAGE_OUTPUT_FORMATS,
-      details: IMAGE_FORMATS,
-    },
-    video: {
-      input: VIDEO_INPUT_FORMATS,
-      output: Object.entries(VIDEO_CONTAINERS).map(([ext, spec]) => ({
-        extension: ext,
-        label: spec.label,
-        videoCodecs: spec.video,
-        audioCodecs: spec.audio,
+      read: [...images.readableExtensions].sort(),
+      write: images.writable.map((c) => ({
+        extensions: c.extensions,
+        label: c.label,
+        supportsQuality: c.supportsQuality,
+        supportsAnimation: c.supportsAnimation,
       })),
-      codecs: VIDEO_CODECS,
-      audioCodecs: AUDIO_CODECS,
+      readOnly: [...IMAGE_INPUT_ONLY_FORMATS],
     },
+    video,
   };
-  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
+
+export async function emitFormats(ffmpegPath?: string): Promise<void> {
+  const report = await collectCapabilities(ffmpegPath);
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+}
+
+/** Static reference data, independent of what any binary supports. */
+export const REFERENCE = {
+  curatedVideoCodecs: VIDEO_CODECS,
+  audioCodecs: AUDIO_CODECS,
+} as const;
 
 function round(n: number): number {
   return Math.round(n * 10_000) / 10_000;

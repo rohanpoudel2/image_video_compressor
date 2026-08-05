@@ -1,20 +1,22 @@
 import sharp from "sharp";
-import type { Sharp } from "sharp";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname, extname } from "node:path";
 import { CompressorError } from "../core/errors.js";
+import { sniffFile } from "../core/sniff.js";
+import { isInputOnlyImageFormat } from "../types/image-formats.js";
 import {
-  imageFormatSpec,
-  isInputOnlyImageFormat,
-  type ImageOutputFormat,
-} from "../types/image-formats.js";
+  encodeOptionsFor,
+  imageCapabilities,
+  type ImageFormatCapability,
+} from "./sharp-capabilities.js";
 import type { Quality } from "../types/brand.js";
 import type { ResizeOptions } from "../types/results.js";
 
 export interface EncodeImageParams {
   readonly inputPath: string;
   readonly outputPath: string;
-  readonly format: ImageOutputFormat;
+  /** Extension of the desired output, e.g. `.webp`. */
+  readonly format: string;
   readonly quality: Quality;
   readonly resize?: ResizeOptions | undefined;
   readonly autoRotate: boolean;
@@ -24,6 +26,32 @@ export interface EncodeImageParams {
 export interface EncodeImageResult {
   readonly bytes: number;
   readonly write: () => Promise<void>;
+}
+
+/** Resolve an extension to a capability this build can actually write. */
+export async function resolveImageTarget(
+  extension: string,
+): Promise<ImageFormatCapability> {
+  const caps = await imageCapabilities();
+  const capability = caps.writableByExtension.get(extension.toLowerCase());
+  if (capability) return capability;
+
+  const available = [...caps.writableByExtension.keys()].sort().join(" ");
+
+  if (isInputOnlyImageFormat(extension)) {
+    throw new CompressorError(
+      "UNSUPPORTED_FORMAT",
+      `${extension} can be read but not written — no encoder exists for it.\n` +
+        `Writable formats in this build: ${available}`,
+    );
+  }
+
+  throw new CompressorError(
+    "UNSUPPORTED_FORMAT",
+    `This sharp build cannot write ${extension}.\n` +
+      `Writable formats: ${available}\n` +
+      "Run `imgvidcompress formats` for the full capability list.",
+  );
 }
 
 /**
@@ -37,13 +65,14 @@ export interface EncodeImageResult {
 export async function encodeImage(
   params: EncodeImageParams,
 ): Promise<EncodeImageResult> {
-  const { inputPath, outputPath, format, quality, resize } = params;
-  const spec = imageFormatSpec(format);
+  const { inputPath, outputPath, quality, resize } = params;
+  const capability = await resolveImageTarget(params.format);
 
   const inputExt = extname(inputPath).toLowerCase();
   // Read animated sources as full sequences so multi-frame GIF/WebP survive.
   // v1 always took frame one, silently flattening every animation it touched.
-  const animated = spec.animated && (inputExt === ".gif" || inputExt === ".webp");
+  const animated =
+    capability.supportsAnimation && (inputExt === ".gif" || inputExt === ".webp");
 
   let pipeline = sharp(inputPath, { animated, failOn: "error" });
 
@@ -63,15 +92,15 @@ export async function encodeImage(
 
   if (params.keepMetadata) pipeline = pipeline.keepMetadata();
 
-  pipeline = applyEncoder(pipeline, spec.encoder, quality);
-
   let buffer: Buffer;
   try {
-    buffer = await pipeline.toBuffer();
+    buffer = await pipeline
+      .toFormat(capability.id, encodeOptionsFor(capability, quality))
+      .toBuffer();
   } catch (err) {
     throw new CompressorError(
       "ENCODE_FAILED",
-      describeSharpError(err, inputPath),
+      await describeSharpError(err, inputPath),
       err instanceof Error ? err.message : String(err),
     );
   }
@@ -86,66 +115,37 @@ export async function encodeImage(
 }
 
 /**
- * Dispatch to the right sharp encoder with defaults tuned per format.
+ * Turn an encoder failure into something actionable.
  *
- * An explicit switch rather than `pipeline[spec.encoder](...)`: each encoder
- * takes a different options type, so indexed access would force the options
- * back to `any` and give up exactly the safety this module exists to provide.
+ * When decoding fails we sniff the file, because the most confusing version of
+ * this error is a video or a PDF wearing an image extension — "unrecognised
+ * image data" sends people hunting for corruption that is not there.
  */
-function applyEncoder(
-  pipeline: Sharp,
-  encoder: ReturnType<typeof imageFormatSpec>["encoder"],
-  quality: Quality,
-): Sharp {
-  switch (encoder) {
-    case "jpeg":
-      // mozjpeg trades encode time for roughly 10% smaller files at equal quality.
-      return pipeline.jpeg({ quality, mozjpeg: true, progressive: true });
-    case "png":
-      // PNG ignores `quality` unless palette quantisation is on, which is where
-      // essentially all of the savings on screenshots and flat graphics come from.
-      return pipeline.png({ quality, compressionLevel: 9, palette: true });
-    case "webp":
-      return pipeline.webp({ quality, effort: 6 });
-    case "avif":
-      // effort 9 is dramatically slower for a fraction of a percent of size.
-      return pipeline.avif({ quality, effort: 5 });
-    case "tiff":
-      return pipeline.tiff({ quality, compression: "jpeg" });
-    case "gif":
-      return pipeline.gif({ effort: 7 });
-    case "jp2":
-      return pipeline.jp2({ quality });
-    case "heif":
-      return pipeline.heif({ quality, compression: "hevc" });
-    case "jxl":
-      return pipeline.jxl({ quality });
-    default:
-      // Unreachable while the registry and SharpEncoder agree; if someone adds
-      // an encoder to the union without handling it here, this stops compiling.
-      return assertNever(encoder);
-  }
-}
-
-function assertNever(value: never): never {
-  throw new CompressorError(
-    "UNSUPPORTED_FORMAT",
-    `Unhandled image encoder: ${String(value)}`,
-  );
-}
-
-function describeSharpError(err: unknown, inputPath: string): string {
+async function describeSharpError(err: unknown, inputPath: string): Promise<string> {
   const raw = err instanceof Error ? err.message : String(err);
-
   const ext = extname(inputPath).toLowerCase();
-  if (isInputOnlyImageFormat(ext) && /unsupported image format/i.test(raw)) {
-    return `Cannot read ${inputPath}: this build of sharp lacks ${ext} decode support.`;
+
+  const decodeFailed =
+    /unsupported image format|VipsForeignLoad|Input buffer contains unsupported/i.test(
+      raw,
+    );
+
+  if (decodeFailed) {
+    const actual = await sniffFile(inputPath);
+    if (actual && actual.kind !== "image") {
+      return `${inputPath} is named like an image but contains ${actual.format} ${actual.kind} data.`;
+    }
+    if (actual) {
+      return `Cannot decode ${inputPath}: this build of sharp lacks ${actual.format} support.`;
+    }
+    if (isInputOnlyImageFormat(ext)) {
+      return `Cannot read ${inputPath}: this build of sharp lacks ${ext} decode support.`;
+    }
+    return `Cannot decode ${inputPath}: unrecognised or corrupt image data.`;
   }
+
   if (/Input file is missing/i.test(raw)) {
     return `Cannot read ${inputPath}: file is missing or unreadable.`;
-  }
-  if (/unsupported image format|VipsForeignLoad/i.test(raw)) {
-    return `Cannot decode ${inputPath}: unrecognised or corrupt image data.`;
   }
   return `Failed to encode ${inputPath}: ${raw}`;
 }

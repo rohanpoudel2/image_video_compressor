@@ -4,7 +4,7 @@ import { access } from "node:fs/promises";
 
 import { tempDir, makeImage } from "./helpers.js";
 import { mapWithConcurrency, defaultConcurrency } from "../src/core/pool.js";
-import { discoverFiles, classify, isUnder } from "../src/core/discover.js";
+import { discoverFiles, classifyFile, isUnder } from "../src/core/discover.js";
 import { compressImages } from "../src/core/compress.js";
 import { CompressorError } from "../src/core/errors.js";
 import { toQuality, toPixels } from "../src/types/brand.js";
@@ -132,14 +132,17 @@ describe("file discovery", () => {
     await makeImage(join(dir, "real.png"));
     await import("node:fs/promises").then((fs) => fs.writeFile(readme, "hi"));
 
-    await expect(discoverFiles([readme])).rejects.toThrow(/Unsupported file type/);
+    await expect(discoverFiles([readme])).rejects.toThrow(/Unrecognised file type/);
   });
 
-  it("classifies by extension", () => {
-    expect(classify("a.PNG")).toBe("image");
-    expect(classify("a.mp4")).toBe("video");
-    expect(classify("a.txt")).toBe(null);
-    expect(classify("a.svg")).toBe("image"); // readable, though not writable
+  it("classifies by extension", async () => {
+    expect(await classifyFile(join(dir, "root.png"))).toBe("image");
+    // Non-existent paths fall through to a sniff that cannot open them, so the
+    // extension is the only signal — which is exactly what is under test.
+    expect(await classifyFile("a.PNG")).toBe("image");
+    expect(await classifyFile("a.mp4")).toBe("video");
+    expect(await classifyFile("a.txt")).toBe(null);
+    expect(await classifyFile("a.svg")).toBe("image"); // readable, not writable
   });
 
   it("isUnder does not match a sibling with a shared prefix", () => {

@@ -124,6 +124,10 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
     const report = await compressVideos([src], {
       outDir: join(dir, "mp4-out"),
       quality: toQuality(50),
+      // A 1s clip is mostly audio, so the re-encode can be larger than the
+      // source and skip-larger would decline to write it. This test is about
+      // which codec lands in the file, not about the ratio.
+      skipLarger: false,
     });
 
     expect(report.summary.failed).toBe(0);
@@ -139,6 +143,7 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
       outDir: join(dir, "webm-out"),
       to: ".webm",
       quality: toQuality(40),
+      skipLarger: false,
     });
 
     expect(report.summary.failed).toBe(0);
@@ -156,6 +161,7 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
     await compressVideos([src], {
       outDir: join(dir, "fps-out"),
       quality: toQuality(50),
+      skipLarger: false,
     });
 
     const rate = await new Promise<string>((resolve) => {
@@ -203,6 +209,7 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
     await compressVideos([src], {
       outDir: join(dir, "progress-out"),
       quality: toQuality(50),
+      skipLarger: false,
       onProgress: (event) => {
         if (event.type === "job-progress") ratios.push(event.ratio);
       },

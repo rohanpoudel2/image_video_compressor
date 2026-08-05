@@ -7,7 +7,7 @@
  *
  * @example
  * ```ts
- * import { compressImages } from "image-and-video-compressor";
+ * import { compressImages, toQuality, toPixels } from "image-and-video-compressor";
  *
  * const report = await compressImages(["./photos"], {
  *   quality: toQuality(80),
@@ -29,16 +29,50 @@ export {
 
 export {
   discoverFiles,
-  classify,
+  classifyFile,
+  classifyByExtension,
+  extensionIndex,
+  resetExtensionIndex,
   type DiscoveredFile,
   type DiscoverOptions,
+  type ExtensionIndex,
 } from "./core/discover.js";
+
 export { mapWithConcurrency, cpuCount, defaultConcurrency } from "./core/pool.js";
 export { CompressorError, toFailure } from "./core/errors.js";
+export { sniff, sniffFile, type SniffResult } from "./core/sniff.js";
+
+// --- Capability detection: what this machine can actually do ---
+export {
+  imageCapabilities,
+  encodeOptionsFor,
+  resetImageCapabilities,
+  type ImageCapabilities,
+  type ImageFormatCapability,
+  type SharpFormatId,
+} from "./codecs/sharp-capabilities.js";
+
+export {
+  ffmpegCapabilities,
+  muxerDetail,
+  parseFormats,
+  parseEncoders,
+  parseMuxerDetail,
+  resetFfmpegCapabilities,
+  type FfmpegCapabilities,
+  type MuxerInfo,
+  type MuxerDetail,
+} from "./codecs/ffmpeg-capabilities.js";
 
 export { resolveFfmpeg, probeDuration, type FfmpegTools } from "./codecs/ffmpeg.js";
-
-export { buildVideoArgs, buildScaleFilter } from "./codecs/video.js";
+export { resolveImageTarget } from "./codecs/image.js";
+export {
+  buildVideoArgs,
+  buildOpenVideoArgs,
+  buildScaleFilter,
+  curatedArgs,
+  validateSpeed,
+} from "./codecs/video.js";
 
 // --- Types: quality/dimension scales ---
 export {
@@ -55,15 +89,13 @@ export {
 
 // --- Types: image formats ---
 export {
-  IMAGE_FORMATS,
-  IMAGE_OUTPUT_FORMATS,
-  IMAGE_INPUT_FORMATS,
-  isImageOutputFormat,
-  isImageInputFormat,
+  CURATED_IMAGE_FORMATS,
+  IMAGE_INPUT_ONLY_FORMATS,
+  isCuratedImageFormat,
   isInputOnlyImageFormat,
-  imageFormatSpec,
+  type CuratedImageFormat,
   type ImageOutputFormat,
-  type ImageInputFormat,
+  type ImageInputOnlyFormat,
 } from "./types/image-formats.js";
 
 // --- Types: video containers and codecs ---
@@ -72,19 +104,23 @@ export {
   VIDEO_CODECS,
   AUDIO_CODECS,
   VIDEO_OUTPUT_FORMATS,
-  VIDEO_INPUT_FORMATS,
+  COMMON_VIDEO_EXTENSIONS,
   isVideoContainer,
-  isVideoInputFormat,
+  isKnownVideoCodec,
   isCodecAllowedIn,
   defaultVideoCodec,
   defaultAudioCodec,
   qualityToCrf,
+  qualityModelFor,
+  mapQuality,
+  codecSpec,
   type VideoContainer,
+  type VideoOutputSpec,
   type VideoCodec,
   type AudioCodec,
   type VideoCodecFor,
   type AudioCodecFor,
-  type VideoInputFormat,
+  type QualityModel,
 } from "./types/video-formats.js";
 
 // --- Types: results ---
@@ -97,8 +133,11 @@ export {
   type CompressionReport,
   type CompressionSummary,
   type CommonOptions,
+  type CompressOptions,
   type ImageOptions,
   type VideoOptions,
+  type ImageTuning,
+  type VideoTuning,
   type JobResult,
   type JobFailure,
   type CompressedResult,

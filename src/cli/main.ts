@@ -8,25 +8,15 @@ import pc from "picocolors";
 import { compress, compressImages, compressVideos } from "../core/compress.js";
 import { CompressorError } from "../core/errors.js";
 import { toQuality, toPixels, RangeValidationError } from "../types/brand.js";
-import {
-  IMAGE_FORMATS,
-  IMAGE_INPUT_FORMATS,
-  IMAGE_OUTPUT_FORMATS,
-} from "../types/image-formats.js";
-import {
-  VIDEO_CONTAINERS,
-  VIDEO_CODECS,
-  VIDEO_OUTPUT_FORMATS,
-} from "../types/video-formats.js";
+import { CURATED_IMAGE_FORMATS } from "../types/image-formats.js";
+import { VIDEO_CODECS, VIDEO_OUTPUT_FORMATS } from "../types/video-formats.js";
 import { Renderer } from "./render.js";
-import { emitReport, emitError, emitFormats } from "./json.js";
+import { emitReport, emitError, emitFormats, collectCapabilities } from "./json.js";
 import type {
   CompressionReport,
   CompressOptions,
   ErrorCode,
-  ImageOptions,
   MediaKind,
-  VideoOptions,
 } from "../types/results.js";
 
 /**
@@ -120,13 +110,25 @@ function addSharedOptions(cmd: Command): Command {
 /**
  * Register `--to`.
  *
- * Kept separate from the tuning options because the auto-detect command mixes
- * image and video flags on one command, and commander rejects a duplicate
- * flag. The auto command therefore gets a single `--to` accepting both sets.
+ * Deliberately *not* `.choices()`. What can be written depends on how sharp and
+ * ffmpeg were built on this machine — a closed list would reject formats the
+ * binaries genuinely support and advertise ones they do not. Validation happens
+ * against the real capability tables instead, which can also explain why
+ * something is unavailable. The suggestions are for help text only.
+ *
+ * It is registered separately from the tuning options because the auto-detect
+ * command mixes image and video flags onto one command, and commander rejects a
+ * duplicate flag.
  */
-function addToOption(cmd: Command, choices: readonly string[], label: string): Command {
-  return cmd.addOption(
-    new Option(`-t, --to <${label}>`, "output format").choices([...choices]),
+function addToOption(
+  cmd: Command,
+  suggestions: readonly string[],
+  label: string,
+): Command {
+  const preview = suggestions.slice(0, 6).join(", ");
+  return cmd.option(
+    `-t, --to <${label}>`,
+    `output format (e.g. ${preview}; see \`formats\`)`,
   );
 }
 
@@ -259,9 +261,9 @@ async function runCompression(
   try {
     const report: CompressionReport =
       kind === "image"
-        ? await compressImages(paths, withProgress as ImageOptions)
+        ? await compressImages(paths, withProgress)
         : kind === "video"
-          ? await compressVideos(paths, withProgress as VideoOptions)
+          ? await compressVideos(paths, withProgress)
           : await compress(paths, withProgress);
 
     renderer.finish();
@@ -330,35 +332,65 @@ async function runLegacy(kind: MediaKind, raw: LegacyRaw): Promise<number> {
   });
 }
 
-function printFormats(): void {
+/**
+ * Human-readable capability listing.
+ *
+ * Reports what the local sharp and ffmpeg genuinely support rather than a list
+ * from the source, so the answer is correct on the machine it is printed on.
+ */
+async function printFormats(ffmpegPath?: string): Promise<void> {
+  const report = await collectCapabilities(ffmpegPath);
   const out = process.stdout;
-  out.write(`\n  ${pc.bold(pc.cyan("Images"))}\n\n`);
-  out.write(`  ${pc.dim("read: ")}${IMAGE_INPUT_FORMATS.join(" ")}\n`);
+
+  out.write(
+    `\n  ${pc.bold(pc.cyan("Images"))} ${pc.dim("(from this sharp build)")}\n\n`,
+  );
   out.write(`  ${pc.dim("write:")}\n`);
-  for (const ext of IMAGE_OUTPUT_FORMATS) {
-    const spec = IMAGE_FORMATS[ext];
+  for (const format of report.image.write) {
     const traits = [
-      spec.lossy ? "quality" : "lossless",
-      spec.alpha ? "alpha" : null,
-      spec.animated ? "animation" : null,
+      format.supportsQuality ? "quality" : "lossless",
+      format.supportsAnimation ? "animation" : null,
     ]
       .filter(Boolean)
       .join(", ");
     out.write(
-      `    ${pc.green(ext.padEnd(7))} ${spec.label.padEnd(14)} ${pc.dim(traits)}\n`,
+      `    ${pc.green(format.extensions.join(" ").padEnd(24))} ${format.label.padEnd(14)} ${pc.dim(traits)}\n`,
     );
   }
 
+  out.write(`\n  ${pc.dim("read:")} ${report.image.read.join(" ")}\n`);
+  out.write(
+    `  ${pc.dim("read-only (no encoder exists):")} ${report.image.readOnly.slice(0, 12).join(" ")}\n`,
+  );
+
   out.write(`\n  ${pc.bold(pc.cyan("Videos"))}\n\n`);
-  out.write(`  ${pc.dim("write:")}\n`);
-  for (const [ext, spec] of Object.entries(VIDEO_CONTAINERS)) {
+  if (!report.video.available) {
     out.write(
-      `    ${pc.green(ext.padEnd(7))} ${spec.label.padEnd(14)} ${pc.dim(`video: ${spec.video.join(", ")}`)}\n`,
+      `  ${pc.yellow("ffmpeg not found — video support unavailable.")}\n` +
+        `  ${pc.dim("Install it, or pass --ffmpeg-path.")}\n\n`,
+    );
+    return;
+  }
+
+  out.write(`  ${pc.dim(report.video.ffmpegVersion ?? "")}\n\n`);
+  out.write(`  ${pc.dim("tuned containers:")}\n`);
+  for (const container of report.video.curated) {
+    out.write(
+      `    ${pc.green(container.extension.padEnd(8))} ${container.label.padEnd(14)} ${pc.dim(`video: ${container.videoCodecs.join(", ")}`)}\n`,
     );
   }
+
   out.write(
-    `\n  ${pc.dim("Note: a container only accepts the codecs listed beside it —")}\n` +
-      `  ${pc.dim("WebM cannot carry H.264, which is why .webm output needs VP9 or AV1.")}\n\n`,
+    `\n  ${pc.dim(`plus ${report.video.muxerCount} muxers and ${report.video.demuxerCount} demuxers this ffmpeg reports —`)}\n` +
+      `  ${pc.dim("any of them can be used as --to; ffmpeg's own defaults apply.")}\n`,
+  );
+  out.write(
+    `  ${pc.dim(`${report.video.videoEncoders.length} video and ${report.video.audioEncoders.length} audio encoders available for --codec.`)}\n`,
+  );
+
+  out.write(
+    `\n  ${pc.dim("A container only accepts certain codecs — WebM cannot carry H.264,")}\n` +
+      `  ${pc.dim("which is why .webm output uses VP9 or AV1.")}\n\n`,
   );
 }
 
@@ -385,7 +417,7 @@ export function buildProgram(): Command {
       program.setOptionValue("exitCode", await runCompression(null, paths, raw, cmd));
     });
   addSharedOptions(auto);
-  addToOption(auto, [...IMAGE_OUTPUT_FORMATS, ...VIDEO_OUTPUT_FORMATS], "format");
+  addToOption(auto, [...CURATED_IMAGE_FORMATS, ...VIDEO_OUTPUT_FORMATS], "format");
   addImageOptions(auto);
   addVideoOptions(auto);
 
@@ -399,7 +431,7 @@ export function buildProgram(): Command {
       );
     });
   addSharedOptions(image);
-  addToOption(image, IMAGE_OUTPUT_FORMATS, "format");
+  addToOption(image, CURATED_IMAGE_FORMATS, "format");
   addImageOptions(image);
 
   const video = program
@@ -419,9 +451,10 @@ export function buildProgram(): Command {
     .command("formats")
     .description("list supported input and output formats")
     .option("--json", "emit the capability list as JSON", false)
-    .action((raw: { json?: boolean }) => {
-      if (raw.json) emitFormats();
-      else printFormats();
+    .option("--ffmpeg-path <path>", "path to the ffmpeg binary")
+    .action(async (raw: { json?: boolean; ffmpegPath?: string }) => {
+      if (raw.json) await emitFormats(raw.ffmpegPath);
+      else await printFormats(raw.ffmpegPath);
     });
 
   // --- deprecated v1 surface, retained for existing installs ---

@@ -4,11 +4,11 @@ import { join, relative, resolve, basename, extname, dirname } from "node:path";
 import { discoverFiles, type DiscoveredFile } from "./discover.js";
 import { mapWithConcurrency, defaultConcurrency } from "./pool.js";
 import { CompressorError, toFailure } from "./errors.js";
-import { encodeImage } from "../codecs/image.js";
-import { encodeVideo } from "../codecs/video.js";
+import { encodeImage, resolveImageTarget } from "../codecs/image.js";
+import { encodeVideo, curatedArgs, buildOpenVideoArgs } from "../codecs/video.js";
+import { muxerDetail, ffmpegCapabilities } from "../codecs/ffmpeg-capabilities.js";
 import { resolveFfmpeg, type FfmpegTools } from "../codecs/ffmpeg.js";
 import { toQuality, type Quality } from "../types/brand.js";
-import { isImageOutputFormat, type ImageOutputFormat } from "../types/image-formats.js";
 import {
   defaultAudioCodec,
   defaultVideoCodec,
@@ -19,6 +19,7 @@ import {
   type VideoCodec,
   type VideoContainer,
 } from "../types/video-formats.js";
+import { imageCapabilities } from "../codecs/sharp-capabilities.js";
 import type {
   CompressionJob,
   CompressionReport,
@@ -33,8 +34,8 @@ import type {
 /** Directory name used when no `outDir` is supplied. */
 export const DEFAULT_OUTPUT_DIRNAME = "compressed";
 
-const DEFAULT_IMAGE_FORMAT: ImageOutputFormat = ".webp";
-const DEFAULT_VIDEO_FORMAT: VideoContainer = ".mp4";
+const DEFAULT_IMAGE_FORMAT = ".webp";
+const DEFAULT_VIDEO_FORMAT = ".mp4";
 const DEFAULT_QUALITY = toQuality(75);
 
 /**
@@ -99,8 +100,12 @@ async function run(
   const tools: FfmpegTools | null =
     needsVideo && !dryRun ? await resolveFfmpeg(options.ffmpegPath) : null;
 
-  const jobs = files.map((file) => planJob(file, options, outDir, kind === null));
+  const jobs = await Promise.all(
+    files.map((file) => planJob(file, options, outDir, kind === null)),
+  );
   assertNoCollisions(jobs);
+
+  options.onProgress?.({ type: "run-start", total: jobs.length });
 
   const concurrency =
     options.concurrency ?? defaultConcurrency(needsVideo ? "video" : "image");
@@ -150,16 +155,18 @@ function outputDirsToSkip(inputs: readonly string[], outDir: string | null): str
 }
 
 /** Decide where a file's output goes and in what format, before any work runs. */
-function planJob(
+async function planJob(
   file: DiscoveredFile,
   options: CompressOptions,
   outDir: string | null,
   mixedRun: boolean,
-): CompressionJob {
+): Promise<CompressionJob> {
   // On a mixed run a single `--to` cannot suit both kinds, so it applies only
   // to the kind it belongs to and the other keeps its default. A kind-scoped
   // run passes the value straight through, where a mismatch is a hard error.
-  const requested = mixedRun ? applicableFormat(options.to, file.kind) : options.to;
+  const requested = mixedRun
+    ? await applicableFormat(options.to, file.kind)
+    : options.to;
 
   const targetFormat =
     file.kind === "image"
@@ -181,6 +188,15 @@ function planJob(
     );
   }
 
+  // Validate the target up front so a configuration mistake fails once, before
+  // any encoding, rather than producing one identical failure per file.
+  if (file.kind === "image") {
+    await resolveImageTarget(targetFormat);
+  } else if (isVideoContainer(targetFormat)) {
+    resolveVideoCodec(targetFormat, options.videoCodec);
+    resolveAudioCodec(targetFormat, options.audioCodec);
+  }
+
   return {
     kind: file.kind,
     inputPath: file.path,
@@ -190,33 +206,53 @@ function planJob(
   };
 }
 
-function applicableFormat(to: string | undefined, kind: MediaKind): string | undefined {
+/**
+ * On a mixed run a single `--to` cannot suit both kinds, so it applies only to
+ * the kind it belongs to and the other keeps its default.
+ *
+ * Resolved through the runtime capability table rather than a fixed list, so a
+ * build-specific format such as `.jxl` still routes to images correctly.
+ */
+async function applicableFormat(
+  to: string | undefined,
+  kind: MediaKind,
+): Promise<string | undefined> {
   if (to === undefined) return undefined;
-  if (kind === "image") return isImageOutputFormat(to) ? to : undefined;
-  return isVideoContainer(to) ? to : undefined;
+  const ext = to.startsWith(".") ? to.toLowerCase() : `.${to.toLowerCase()}`;
+
+  const caps = await imageCapabilities();
+  const isImageFormat = caps.writableByExtension.has(ext);
+
+  return kind === "image"
+    ? isImageFormat
+      ? ext
+      : undefined
+    : isImageFormat
+      ? undefined
+      : ext;
 }
 
-function resolveImageFormat(
-  to: string | undefined,
-  inputPath: string,
-): ImageOutputFormat {
+function resolveImageFormat(to: string | undefined, inputPath: string): string {
   if (to === undefined) {
     // Preserve an already-modern format; otherwise convert to WebP.
     const ext = extname(inputPath).toLowerCase();
     return ext === ".avif" || ext === ".webp" ? ext : DEFAULT_IMAGE_FORMAT;
   }
-  if (!isImageOutputFormat(to)) {
-    throw new CompressorError("UNSUPPORTED_FORMAT", `Cannot write images as "${to}".`);
-  }
-  return to;
+  // Validated against the running sharp build in resolveImageTarget, which can
+  // say *why* a format is unavailable instead of just rejecting it.
+  return to.startsWith(".") ? to.toLowerCase() : `.${to.toLowerCase()}`;
 }
 
-function resolveVideoFormat(to: string | undefined): VideoContainer {
+/**
+ * Any extension ffmpeg can mux is allowed here.
+ *
+ * Curated containers keep their typed matrix and tuned flags; everything else
+ * is resolved against the binary at encode time. Rejecting an extension merely
+ * because it is not in a hand-written list would be a limit with no basis.
+ */
+function resolveVideoFormat(to: string | undefined): string {
   if (to === undefined) return DEFAULT_VIDEO_FORMAT;
-  if (!isVideoContainer(to)) {
-    throw new CompressorError("UNSUPPORTED_FORMAT", `Cannot write videos as "${to}".`);
-  }
-  return to;
+  return to.startsWith(".") ? to.toLowerCase() : `.${to.toLowerCase()}`;
 }
 
 /** Two sources mapping to one destination would silently destroy work. */
@@ -315,7 +351,7 @@ async function runImageJob(
   const encoded = await encodeImage({
     inputPath: job.inputPath,
     outputPath: job.outputPath,
-    format: job.targetFormat as ImageOutputFormat,
+    format: job.targetFormat,
     quality: ctx.quality,
     resize: ctx.options.resize,
     autoRotate: ctx.options.autoRotate ?? true,
@@ -339,22 +375,16 @@ async function runVideoJob(
     );
   }
 
-  const container = job.targetFormat as VideoContainer;
-  const videoCodec = resolveVideoCodec(container, ctx.options.videoCodec);
-  const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec);
+  const extension = job.targetFormat;
+  const args = isVideoContainer(extension)
+    ? curatedArgsFor(extension, job, ctx)
+    : await openArgsFor(extension, job, ctx);
 
   const encoded = await encodeVideo({
     tools: ctx.tools,
     inputPath: job.inputPath,
     outputPath: job.outputPath,
-    container,
-    // Checked against the container's matrix by resolveVideoCodec above.
-    videoCodec: videoCodec,
-    audioCodec: audioCodec,
-    quality: ctx.quality,
-    speed: ctx.options.preset,
-    fps: ctx.options.fps,
-    resize: ctx.options.resize,
+    args,
     ...(ctx.options.onProgress
       ? {
           onProgress: (ratio: number) =>
@@ -371,8 +401,84 @@ async function runVideoJob(
   return encoded.bytes;
 }
 
+/** Curated container: typed codec matrix and tuned per-codec flags. */
+function curatedArgsFor(
+  container: VideoContainer,
+  job: CompressionJob,
+  ctx: ExecuteContext,
+): string[] {
+  const videoCodec = resolveVideoCodec(container, ctx.options.videoCodec);
+  const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec);
+
+  return curatedArgs({
+    inputPath: job.inputPath,
+    outputPath: job.outputPath,
+    container,
+    // Checked against the container's own matrix by the resolvers above.
+    videoCodec: videoCodec,
+    audioCodec: audioCodec,
+    quality: ctx.quality,
+    speed: ctx.options.preset,
+    fps: ctx.options.fps,
+    resize: ctx.options.resize,
+  });
+}
+
 /**
- * Validate a user-supplied codec against the container at runtime.
+ * Any other container ffmpeg can mux.
+ *
+ * The muxer is asked for its own defaults rather than guessed at: whatever
+ * ffmpeg would have chosen unaided is by definition muxable. An explicit
+ * `--codec` is checked against the encoder list first, so a typo fails with a
+ * clear message instead of a wall of ffmpeg stderr.
+ */
+async function openArgsFor(
+  extension: string,
+  job: CompressionJob,
+  ctx: ExecuteContext,
+): Promise<string[]> {
+  const ffmpeg = ctx.tools?.ffmpeg ?? "ffmpeg";
+  const muxer = extension.slice(1);
+  const detail = await muxerDetail(ffmpeg, muxer);
+
+  if (!detail) {
+    const caps = await ffmpegCapabilities(ffmpeg);
+    if (!caps.muxers.has(muxer)) {
+      throw new CompressorError(
+        "UNSUPPORTED_FORMAT",
+        `This ffmpeg build cannot write "${extension}".\n` +
+          "Run `imgvidcompress formats` to see what it supports.",
+      );
+    }
+  }
+
+  const requested = ctx.options.videoCodec;
+  if (requested !== undefined) {
+    const caps = await ffmpegCapabilities(ffmpeg);
+    if (!caps.videoEncoders.has(requested)) {
+      throw new CompressorError(
+        "INVALID_OPTION",
+        `This ffmpeg build has no video encoder called "${requested}".`,
+      );
+    }
+  }
+
+  return buildOpenVideoArgs({
+    inputPath: job.inputPath,
+    outputPath: job.outputPath,
+    extension,
+    // null means "let ffmpeg decide", which is always a legal choice.
+    videoCodec: requested ?? null,
+    audioCodec: ctx.options.audioCodec ?? null,
+    quality: ctx.quality,
+    speed: ctx.options.preset,
+    fps: ctx.options.fps,
+    resize: ctx.options.resize,
+  });
+}
+
+/**
+ * Validate a user-supplied codec against a curated container.
  *
  * The type system covers codecs chosen in code; a `--codec` string off the
  * command line has to be checked here, and the error names the legal options
@@ -393,7 +499,7 @@ function resolveVideoCodec(
       `${VIDEO_CONTAINERS[container].label} cannot carry ${requested}. Supported: ${allowed}.`,
     );
   }
-  return requested;
+  return requested as VideoCodec;
 }
 
 function resolveAudioCodec(

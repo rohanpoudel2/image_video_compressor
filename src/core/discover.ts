@@ -1,8 +1,10 @@
 import { stat, readdir } from "node:fs/promises";
 import { join, resolve, extname, relative, isAbsolute, dirname, sep } from "node:path";
 import { CompressorError } from "./errors.js";
-import { isImageInputFormat } from "../types/image-formats.js";
-import { isVideoInputFormat } from "../types/video-formats.js";
+import { sniffFile } from "./sniff.js";
+import { imageCapabilities } from "../codecs/sharp-capabilities.js";
+import { COMMON_VIDEO_EXTENSIONS, isVideoContainer } from "../types/video-formats.js";
+import { IMAGE_INPUT_ONLY_FORMATS } from "../types/image-formats.js";
 import type { MediaKind } from "../types/results.js";
 
 export interface DiscoveredFile {
@@ -18,23 +20,77 @@ export interface DiscoveredFile {
 }
 
 export interface DiscoverOptions {
-  /** Descend into subdirectories. Directories are scanned shallowly otherwise. */
   readonly recursive?: boolean;
-  /** Restrict to one media kind; omit to accept both. */
   readonly kind?: MediaKind;
-  /**
-   * Absolute paths never to descend into — the output directories.
-   *
-   * A list rather than a single path because a run can have several input
-   * roots, each with its own default `compressed/` destination.
-   */
   readonly excludeDirs?: readonly string[];
 }
 
-export function classify(filePath: string): MediaKind | null {
+/**
+ * Extension sets used to classify files.
+ *
+ * Images come from the running sharp build rather than a hardcoded list, so a
+ * build with JPEG XL support picks up `.jxl` automatically. Video extensions
+ * are a broad static set used as a fast path — ffmpeg reads far more than this,
+ * which is what the content sniff is for.
+ */
+export interface ExtensionIndex {
+  readonly image: ReadonlySet<string>;
+  readonly video: ReadonlySet<string>;
+}
+
+let indexCache: Promise<ExtensionIndex> | null = null;
+
+export function resetExtensionIndex(): void {
+  indexCache = null;
+}
+
+export function extensionIndex(): Promise<ExtensionIndex> {
+  indexCache ??= buildIndex();
+  return indexCache;
+}
+
+async function buildIndex(): Promise<ExtensionIndex> {
+  const caps = await imageCapabilities();
+
+  const image = new Set<string>(caps.readableExtensions);
+  for (const ext of IMAGE_INPUT_ONLY_FORMATS) image.add(ext);
+
+  const video = new Set<string>(COMMON_VIDEO_EXTENSIONS);
+
+  // `.gif` and `.ogg` are claimed by both worlds. Images win: a GIF handed to
+  // sharp round-trips correctly, while ffmpeg would treat it as a video stream.
+  for (const ext of image) video.delete(ext);
+
+  return { image, video };
+}
+
+/**
+ * Classify a file.
+ *
+ * Extension first, since it is free and right almost always. Sniffing is the
+ * fallback for what a name genuinely cannot answer — no extension, an unknown
+ * one, or an ISO container whose `.mp4`/`.avif` ambiguity is only resolvable
+ * from the brand bytes. A merely *mislabelled* file needs no special handling:
+ * sharp and ffmpeg both detect their input's real format.
+ */
+export async function classifyFile(filePath: string): Promise<MediaKind | null> {
+  const index = await extensionIndex();
+  const byExtension = classifyByExtension(filePath, index);
+  if (byExtension) return byExtension;
+
+  const sniffed = await sniffFile(filePath);
+  return sniffed?.kind ?? null;
+}
+
+/** Extension-only check, for bulk discovery where a file read per entry is too costly. */
+export function classifyByExtension(
+  filePath: string,
+  index: ExtensionIndex,
+): MediaKind | null {
   const ext = extname(filePath).toLowerCase();
-  if (isImageInputFormat(ext)) return "image";
-  if (isVideoInputFormat(ext)) return "video";
+  if (ext === "") return null;
+  if (index.image.has(ext)) return "image";
+  if (index.video.has(ext) || isVideoContainer(ext)) return "video";
   return null;
 }
 
@@ -42,9 +98,9 @@ export function classify(filePath: string): MediaKind | null {
  * Resolve CLI inputs — files, directories, or shell-expanded globs — into a
  * concrete, deduplicated work list.
  *
- * v1 did a single flat `readdir` and could only ever see one directory, with no
- * way to pass an individual file. It also never checked whether an entry was a
- * directory, so a folder named `assets.png` would be handed to sharp.
+ * v1 did a single flat `readdir`, could only ever see one directory, and had no
+ * way to accept an individual file. It also never checked whether an entry was
+ * a directory, so a folder named `assets.png` would be handed to sharp.
  */
 export async function discoverFiles(
   inputs: readonly string[],
@@ -57,6 +113,7 @@ export async function discoverFiles(
     );
   }
 
+  const index = await extensionIndex();
   const seen = new Map<string, DiscoveredFile>();
   const exclude = (options.excludeDirs ?? []).map((d) => resolve(d));
 
@@ -74,15 +131,16 @@ export async function discoverFiles(
     }
 
     if (info.isDirectory()) {
-      await walk(absolute, absolute, options, exclude, seen);
+      await walk(absolute, absolute, options, exclude, index, seen);
     } else if (info.isFile()) {
-      // An explicitly named file bypasses kind filtering only if it matches;
-      // naming an unsupported file should say so rather than silently do nothing.
-      const kind = classify(absolute);
+      // A file named explicitly gets the full treatment, sniff included: the
+      // user clearly meant this one and deserves a real answer.
+      const kind = await classifyFile(absolute);
       if (kind === null) {
         throw new CompressorError(
           "UNSUPPORTED_FORMAT",
-          `Unsupported file type: ${input}`,
+          `Unrecognised file type: ${input}\n` +
+            "Neither the extension nor the contents identify it as an image or video.",
         );
       }
       if (options.kind && kind !== options.kind) continue;
@@ -104,6 +162,7 @@ async function walk(
   root: string,
   options: DiscoverOptions,
   exclude: readonly string[],
+  index: ExtensionIndex,
   out: Map<string, DiscoveredFile>,
 ): Promise<void> {
   if (isExcluded(dir, exclude)) return;
@@ -121,13 +180,17 @@ async function walk(
     const full = join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      if (options.recursive) await walk(full, root, options, exclude, out);
+      if (options.recursive) await walk(full, root, options, exclude, index, out);
       continue;
     }
     if (!entry.isFile()) continue; // Sockets, FIFOs, dangling symlinks.
     if (entry.name.startsWith(".")) continue; // .DS_Store and friends.
 
-    const kind = classify(full);
+    // Bulk discovery stays on the extension fast path. Sniffing every entry in
+    // a large tree means opening thousands of files just to skip most of them,
+    // and an extensionless file found by scanning is far more often a stray
+    // artefact than media someone wanted compressed.
+    const kind = classifyByExtension(full, index);
     if (kind === null) continue;
     if (options.kind && kind !== options.kind) continue;
 

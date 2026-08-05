@@ -68,7 +68,9 @@ describe("v1 regressions", () => {
       const result = await runCli(["image", src, "--to", ".svg"]);
 
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toMatch(/invalid|Allowed choices/i);
+      // The message now says *why*, and lists what this build can write.
+      expect(result.stderr).toMatch(/read but not written/i);
+      expect(result.stderr).toMatch(/Writable formats/i);
       expect(result.stderr).not.toContain("is not a function");
     });
   });
@@ -78,12 +80,12 @@ describe("v1 regressions", () => {
       // v1: crf = 100 - quality, giving CRF 90 at --quality=10 (x264 max is 51)
       // and CRF 0 at --quality=100 (lossless, reliably larger than the source).
       for (const codec of Object.keys(VIDEO_CODECS) as VideoCodec[]) {
-        const { crfMin, crfMax } = VIDEO_CODECS[codec];
+        const { min, max } = VIDEO_CODECS[codec].quality;
 
         for (let q = 1; q <= 100; q++) {
           const crf = qualityToCrf(toQuality(q), codec);
-          expect(crf, `${codec} @ quality ${q}`).toBeGreaterThanOrEqual(crfMin);
-          expect(crf, `${codec} @ quality ${q}`).toBeLessThanOrEqual(crfMax);
+          expect(crf, `${codec} @ quality ${q}`).toBeGreaterThanOrEqual(min);
+          expect(crf, `${codec} @ quality ${q}`).toBeLessThanOrEqual(max);
         }
       }
     });
@@ -99,6 +101,9 @@ describe("v1 regressions", () => {
       // cannot be correct for both.
       expect(qualityToCrf(toQuality(1), "libvpx-vp9")).toBe(55);
       expect(qualityToCrf(toQuality(1), "libx264")).toBe(45);
+      // Theora's scale runs the other way: low quality is a *low* number.
+      expect(qualityToCrf(toQuality(1), "libtheora")).toBe(3);
+      expect(qualityToCrf(toQuality(100), "libtheora")).toBe(9);
       expect(qualityToCrf(toQuality(1), "libvpx-vp9")).not.toBe(
         qualityToCrf(toQuality(1), "libx264"),
       );
@@ -108,8 +113,11 @@ describe("v1 regressions", () => {
       // CRF 0 is mathematically lossless and reliably larger than the source,
       // which is the opposite of what a compressor should do at any setting.
       for (const codec of Object.keys(VIDEO_CODECS) as VideoCodec[]) {
-        const crf = qualityToCrf(toQuality(100), codec);
-        expect(crf, `${codec} at max quality`).toBeGreaterThan(0);
+        const value = qualityToCrf(toQuality(100), codec);
+        const model = VIDEO_CODECS[codec].quality;
+        // libtheora counts upwards, so "lossless" is its max, not its min.
+        const lossless = model.best < model.worst ? model.min : model.max;
+        expect(value, `${codec} at max quality`).not.toBe(lossless);
       }
     });
 
