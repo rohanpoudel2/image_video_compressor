@@ -10,17 +10,21 @@ import { toQuality, toPixels } from "../src/types/brand.js";
 import { resolveFfmpeg, resetFfmpegCache } from "../src/codecs/ffmpeg.js";
 import { CompressorError } from "../src/core/errors.js";
 
-/** Read a stream's codec name back out of the encoded file. */
-function probeCodec(file: string, stream: "v" | "a"): Promise<string> {
+/** Read arbitrary stream fields back out of the encoded file. */
+function probeStream(
+  file: string,
+  entries: string,
+  stream: "v" | "a" = "v",
+): Promise<string> {
   const args = [
     "-v",
     "error",
     "-select_streams",
     `${stream}:0`,
     "-show_entries",
-    "stream=codec_name",
+    `stream=${entries}`,
     "-of",
-    "default=noprint_wrappers=1:nokey=1",
+    "csv=p=0",
     file,
   ];
 
@@ -31,6 +35,11 @@ function probeCodec(file: string, stream: "v" | "a"): Promise<string> {
     child.on("error", reject);
     child.on("close", () => resolve(out.trim()));
   });
+}
+
+/** Read a stream's codec name back out of the encoded file. */
+function probeCodec(file: string, stream: "v" | "a"): Promise<string> {
+  return probeStream(file, "codec_name", stream);
 }
 
 describe("video argument construction", () => {
@@ -49,6 +58,31 @@ describe("video argument construction", () => {
   it("returns null when no resize was requested", () => {
     expect(buildScaleFilter(undefined)).toBeNull();
     expect(buildScaleFilter({})).toBeNull();
+  });
+
+  it("clamps both dimensions to the source, so a small input is never enlarged", () => {
+    // `force_original_aspect_ratio=decrease` fits the frame inside the box but
+    // scales *up* to reach it, so the box has to be bounded by the source.
+    // Without the clamp a 320x240 clip given a 4000x4000 box encoded at
+    // 4000x3000 — from options documented as "never enlarge".
+    const filter = buildScaleFilter({
+      maxWidth: toPixels(4000),
+      maxHeight: toPixels(4000),
+    });
+
+    expect(filter).toContain("min(iw\\,4000)");
+    expect(filter).toContain("min(ih\\,4000)");
+  });
+
+  it("allows upscaling only when withoutEnlargement is explicitly false", () => {
+    const filter = buildScaleFilter({
+      maxWidth: toPixels(4000),
+      maxHeight: toPixels(4000),
+      withoutEnlargement: false,
+    });
+
+    expect(filter).not.toContain("min(");
+    expect(filter).toContain("w=4000");
   });
 
   it("adds faststart for MP4 so playback can begin before download finishes", () => {
@@ -132,6 +166,31 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
 
     expect(report.summary.failed).toBe(0);
     expect(await probeCodec(join(dir, "mp4-out", "clip.mp4"), "v")).toBe("h264");
+  }, 120_000);
+
+  it("does not enlarge a small source given a large resize box", async () => {
+    // The fixture is 320x240; the box is far larger in both dimensions. This
+    // encoded at 4000x3000 before the clamp, so assert against the real file
+    // rather than the filter string.
+    const src = join(dir, "no-enlarge");
+    await makeVideo(join(src, "clip.mp4"));
+
+    const report = await compressVideos([src], {
+      outDir: join(dir, "no-enlarge-out"),
+      resize: {
+        maxWidth: toPixels(4000),
+        maxHeight: toPixels(4000),
+        withoutEnlargement: true,
+      },
+      skipLarger: false,
+    });
+
+    expect(report.summary.failed).toBe(0);
+    const size = await probeStream(
+      join(dir, "no-enlarge-out", "clip.mp4"),
+      "width,height",
+    );
+    expect(size).toBe("320,240");
   }, 120_000);
 
   it("produces a playable WebM, which v1 could not", async () => {

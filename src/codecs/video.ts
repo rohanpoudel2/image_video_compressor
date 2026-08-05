@@ -290,11 +290,23 @@ export function buildScaleFilter(resize?: ResizeOptions): string | null {
   const h = resize?.maxHeight;
   if (w === undefined && h === undefined) return null;
 
+  // Matches the image path's default; an explicit false opts into upscaling.
+  const noEnlarge = resize?.withoutEnlargement ?? true;
+
   if (w !== undefined && h !== undefined) {
-    return `scale=w=${w}:h=${h}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
+    // Bound the box by the source itself. `force_original_aspect_ratio=decrease`
+    // fits the frame *inside* the box but will scale up to reach it, so a
+    // 320x240 clip asked to fit 4000x4000 came out at 4000x3000 — a 12x
+    // enlargement from options documented as "never enlarge". The
+    // single-dimension branches below already clamped; this one did not.
+    const boundW = noEnlarge ? `min(iw\\,${w})` : `${w}`;
+    const boundH = noEnlarge ? `min(ih\\,${h})` : `${h}`;
+    return `scale=w=${boundW}:h=${boundH}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
   }
-  if (w !== undefined) return `scale=w=min(iw\\,${w}):h=-2`;
-  return `scale=w=-2:h=min(ih\\,${h})`;
+  if (w !== undefined) {
+    return noEnlarge ? `scale=w=min(iw\\,${w}):h=-2` : `scale=w=${w}:h=-2`;
+  }
+  return noEnlarge ? `scale=w=-2:h=min(ih\\,${h})` : `scale=w=-2:h=${h}`;
 }
 
 /** Curated path: validates the speed knob and maps quality onto the codec's CRF. */
