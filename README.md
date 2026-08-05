@@ -363,8 +363,11 @@ The tool is built to be driven by something that is not a person: a build script
 There is an MCP server, so an agent can compress media directly instead of being told a command to run:
 
 ```bash
-claude mcp add image-video-compressor -- npx -y image-and-video-compressor-mcp
+claude mcp add image-video-compressor -- npx -y image-and-video-compressor-mcp   # Claude Code
+codex mcp add image-video-compressor -- npx -y image-and-video-compressor-mcp    # Codex CLI
 ```
+
+Any other MCP client takes the same stdio command; see [mcp/README.md](./mcp/README.md) for Claude Desktop, Cursor, VS Code and the raw config.
 
 Five tools over stdio: `compress_media` (every option the library takes), `discover_media`, `probe_media`, `list_capabilities` and `plan_video_conversion`.
 
