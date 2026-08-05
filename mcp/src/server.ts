@@ -6,17 +6,33 @@ import {
   compressImages,
   compressVideos,
   classifyFile,
+  discoverFiles,
   sniffFile,
   probeMedia,
+  planStreams,
   resolveFfmpeg,
   imageCapabilities,
   ffmpegCapabilities,
   toQuality,
   toPixels,
+  isVideoContainer,
+  isCodecAllowedIn,
+  defaultVideoCodec,
+  defaultAudioCodec,
+  qualityModelFor,
+  mapQuality,
   VIDEO_CONTAINERS,
+  VIDEO_OUTPUT_FORMATS,
   type CompressOptions,
   type CompressionReport,
 } from "image-and-video-compressor";
+
+/** Library errors carry a stable `code`; anything else is unknown. */
+function errorCode(err: unknown): string {
+  return typeof err === "object" && err !== null && "code" in err
+    ? String(err.code)
+    : "UNKNOWN";
+}
 
 /**
  * Every tool returns JSON as text content.
@@ -60,12 +76,17 @@ function summarise(report: CompressionReport) {
         ? {
             status: result.status,
             inputPath: result.inputPath,
+            // Kept on every branch: a dry run is useless without it, and an
+            // "output-exists" skip that does not say WHICH file collided
+            // sends the caller hunting through the output directory.
+            outputPath: result.outputPath,
             error: { code: result.error.code, message: result.error.message },
           }
         : result.status === "skipped"
           ? {
               status: result.status,
               inputPath: result.inputPath,
+              outputPath: result.outputPath,
               reason: result.reason,
               ...(result.warnings?.length ? { warnings: result.warnings } : {}),
             }
@@ -172,6 +193,18 @@ export function createServer(): McpServer {
           .boolean()
           .default(true)
           .describe("Keep the original when compression would make it bigger."),
+        keepMetadata: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Images: preserve EXIF and ICC instead of stripping it. Stripping saves real bytes.",
+          ),
+        autoRotate: z
+          .boolean()
+          .default(true)
+          .describe(
+            "Images: apply EXIF orientation, so portrait shots are not left sideways.",
+          ),
         videoCodec: z
           .string()
           .optional()
@@ -187,6 +220,13 @@ export function createServer(): McpServer {
           .max(240)
           .optional()
           .describe("Cap frame rate. Default keeps the source rate."),
+        preset: z
+          .string()
+          .optional()
+          .describe(
+            "Encoder speed/efficiency tradeoff. Codec-specific: 'slow'/'medium'/'fast' for " +
+              "x264 and x265, a numeric cpu-used for VP9 and AV1. Sane default per codec.",
+          ),
         ffmpegPath: z
           .string()
           .optional()
@@ -209,7 +249,10 @@ export function createServer(): McpServer {
           overwrite: args.overwrite,
           dryRun: args.dryRun,
           skipLarger: args.skipLarger,
+          keepMetadata: args.keepMetadata,
+          autoRotate: args.autoRotate,
           ...(args.concurrency !== undefined ? { concurrency: args.concurrency } : {}),
+          ...(args.preset !== undefined ? { preset: args.preset } : {}),
           ...(args.videoCodec !== undefined
             ? { videoCodec: args.videoCodec as CompressOptions["videoCodec"] }
             : {}),
@@ -244,11 +287,10 @@ export function createServer(): McpServer {
       } catch (err) {
         // Setup errors (no inputs, bad option, ffmpeg missing) reject; per-file
         // problems already arrive as failed results inside the report.
-        const code =
-          typeof err === "object" && err !== null && "code" in err
-            ? String(err.code)
-            : "UNKNOWN";
-        return failure(err instanceof Error ? err.message : String(err), code);
+        return failure(
+          err instanceof Error ? err.message : String(err),
+          errorCode(err),
+        );
       }
     },
   );
@@ -260,8 +302,9 @@ export function createServer(): McpServer {
       description:
         "Identify a media file without modifying it: whether it is an image or a video, " +
         "its size on disk, and for video its duration and stream layout (video, audio, " +
-        "subtitle tracks) via ffprobe. Detection uses content bytes when the extension is " +
-        "missing or wrong, so it correctly reports a .jpg that is really an MP4.",
+        "subtitle tracks) via ffprobe. Identification is by content, not by filename, so " +
+        "a .jpg that is really an MP4 is reported as the video it is — with a note saying " +
+        "the extension disagrees.",
       inputSchema: {
         path: z.string().describe("Path to a single media file."),
       },
@@ -277,14 +320,38 @@ export function createServer(): McpServer {
         const info = await stat(path);
         if (!info.isFile()) return failure(`Not a file: ${path}`, "INPUT_NOT_FOUND");
 
-        const kind = await classifyFile(path);
+        const byExtension = await classifyFile(path);
         const sniffed = await sniffFile(path);
+
+        /**
+         * Content wins over the name.
+         *
+         * `classifyFile` answers by extension first, which is the right default
+         * for bulk discovery where opening every file is too costly. Here the
+         * caller has named one file and wants the truth about it. Trusting the
+         * extension meant a JPEG called `.mp4` was reported as a video, and
+         * ffprobe was then run on it — the image2 demuxer duly reported a
+         * one-frame "mjpeg video stream", so the answer looked plausible and
+         * was entirely fabricated.
+         */
+        const kind = sniffed?.kind ?? byExtension;
+        const misnamed =
+          sniffed !== null && byExtension !== null && sniffed.kind !== byExtension;
 
         const base = {
           path,
           kind,
           bytes: info.size,
           ...(sniffed ? { detected: sniffed } : {}),
+          ...(misnamed
+            ? {
+                extensionSuggests: byExtension,
+                note:
+                  `The extension says ${byExtension} but the contents are ${sniffed.format}. ` +
+                  "Reporting what the bytes say. Encoders read the real format too, so this " +
+                  "file still compresses correctly.",
+              }
+            : {}),
         };
 
         if (kind !== "video") return json(base);
@@ -313,6 +380,198 @@ export function createServer(): McpServer {
         return failure(
           err instanceof Error ? err.message : String(err),
           "INPUT_NOT_FOUND",
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "discover_media",
+    {
+      title: "List media files under a path",
+      description:
+        "List the image and video files under the given paths without compressing or " +
+        "opening them. Cheap: classification is by extension against what this sharp and " +
+        "ffmpeg build handles, so it scans large trees quickly. Use it to answer 'what " +
+        "media is in this project and how big is it' before deciding what to compress.",
+      inputSchema: {
+        paths: z.array(z.string()).min(1).describe("Files or directories to scan."),
+        kind: z
+          .enum(["auto", "image", "video"])
+          .default("auto")
+          .describe("Restrict the listing to one media type."),
+        recursive: z.boolean().default(false).describe("Descend into subdirectories."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args) => {
+      try {
+        const files = await discoverFiles(args.paths, {
+          recursive: args.recursive,
+          ...(args.kind !== "auto" ? { kind: args.kind } : {}),
+        });
+
+        const totalBytes = files.reduce((sum, file) => sum + file.bytes, 0);
+        return json({
+          totalFiles: files.length,
+          totalBytes,
+          images: files.filter((file) => file.kind === "image").length,
+          videos: files.filter((file) => file.kind === "video").length,
+          files: files.map((file) => ({
+            path: file.path,
+            kind: file.kind,
+            bytes: file.bytes,
+          })),
+        });
+      } catch (err) {
+        return failure(
+          err instanceof Error ? err.message : String(err),
+          errorCode(err),
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "plan_video_conversion",
+    {
+      title: "Preview what converting a video would do",
+      description:
+        "For a video and a target container, report which streams survive, which are " +
+        "dropped and why, the codec that would be used, and what a given quality maps to " +
+        "on that codec's own scale. Answers 'will I lose my subtitles or commentary track " +
+        "if I convert this to mp4' before any file is written. Read-only.",
+      inputSchema: {
+        path: z.string().describe("Path to the source video."),
+        to: z
+          .string()
+          .describe(
+            "Target container, e.g. '.mp4', '.webm', '.mkv'. Must be a curated container.",
+          ),
+        quality: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(75)
+          .describe("Quality to translate onto the target codec's scale."),
+        videoCodec: z
+          .string()
+          .optional()
+          .describe("Override the codec. Must be legal for the container."),
+        ffmpegPath: z
+          .string()
+          .optional()
+          .describe("Explicit path to the ffmpeg binary."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args) => {
+      const container = args.to.startsWith(".")
+        ? args.to.toLowerCase()
+        : `.${args.to.toLowerCase()}`;
+
+      if (!isVideoContainer(container)) {
+        return failure(
+          `${container} is not a curated container. Curated: ${VIDEO_OUTPUT_FORMATS.join(", ")}. ` +
+            "Other containers your ffmpeg can mux still work in compress_media, but cannot be planned here.",
+          "UNSUPPORTED_FORMAT",
+        );
+      }
+
+      const codec = args.videoCodec ?? defaultVideoCodec(container);
+      if (!isCodecAllowedIn(container, codec)) {
+        return failure(
+          `${VIDEO_CONTAINERS[container].label} cannot carry ${codec}. ` +
+            `Allowed: ${VIDEO_CONTAINERS[container].video.join(", ")}.`,
+          "UNSUPPORTED_FORMAT",
+        );
+      }
+
+      try {
+        const tools = await resolveFfmpeg(args.ffmpegPath);
+        if (!tools.ffprobe)
+          return failure(
+            "ffprobe unavailable; cannot inspect streams.",
+            "FFMPEG_NOT_FOUND",
+          );
+
+        /**
+         * The curated table says which codecs a container *may* carry; it does
+         * not know what this ffmpeg was built with. Without this check the plan
+         * cheerfully promised libtheora for .ogv on a build with no Theora
+         * encoder, and the compression that followed died with "Unknown
+         * encoder". A plan that predicts success for something that cannot run
+         * is worse than no plan at all.
+         */
+        const caps = await ffmpegCapabilities(tools.ffmpeg);
+        if (!caps.videoEncoders.has(codec)) {
+          const usable = VIDEO_CONTAINERS[container].video.filter((candidate) =>
+            caps.videoEncoders.has(candidate),
+          );
+          return failure(
+            `This ffmpeg has no ${codec} encoder, so ${container} cannot be produced with it. ` +
+              (usable.length > 0
+                ? `Available for ${container} on this machine: ${usable.join(", ")}.`
+                : `No encoder for ${container} is available in this build at all.`),
+            "UNSUPPORTED_FORMAT",
+          );
+        }
+
+        const probe = await probeMedia(tools.ffprobe, args.path);
+        const { plan, dropped } = planStreams(container, probe);
+
+        // Quality is mapped onto the codec's own scale and direction — CRF
+        // counts down, Theora counts up — so report the real encoder value.
+        const model = qualityModelFor(codec);
+        const encoderValue = model ? mapQuality(toQuality(args.quality), model) : null;
+
+        // Same reasoning as the video encoder: only promise an audio codec the
+        // binary can actually produce.
+        // A container's default audio codec is always a real encoder, never
+        // "copy", so availability is a straight lookup.
+        const audioCodec = defaultAudioCodec(container);
+        const audioAvailable = caps.audioEncoders.has(audioCodec);
+
+        return json({
+          container,
+          label: VIDEO_CONTAINERS[container].label,
+          videoCodec: codec,
+          audioCodec,
+          ...(audioAvailable
+            ? {}
+            : {
+                audioNote:
+                  `This ffmpeg has no ${audioCodec} encoder. Audio would fail unless the ` +
+                  "source track can be copied through, so pass audioCodec explicitly.",
+              }),
+          quality: args.quality,
+          encoderValue,
+          durationSeconds: probe.durationSeconds,
+          keeps: {
+            video: plan.video.length,
+            audio: plan.audio.length,
+            subtitles: plan.subtitles.length,
+            attachments: plan.attachments,
+          },
+          // Named explicitly: losing a commentary track silently is worse than
+          // refusing outright, because nobody notices until they need it.
+          dropped,
+        });
+      } catch (err) {
+        return failure(
+          err instanceof Error ? err.message : String(err),
+          errorCode(err),
         );
       }
     },
