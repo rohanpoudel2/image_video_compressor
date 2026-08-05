@@ -2,7 +2,8 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "coverage/**"] },
+  // Globbed at every depth: the mcp workspace has its own dist/ and node_modules/.
+  { ignores: ["**/dist/**", "**/node_modules/**", "coverage/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {

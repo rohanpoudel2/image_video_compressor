@@ -22,6 +22,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run typecheck -w image-and-video-compressor-mcp
       - run: npm run lint
       - run: npm run format:check
 
@@ -64,6 +65,12 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+
+      # The MCP server is a separate workspace package. Its test skips itself
+      # when the server is not built, so without this the suite would pass
+      # while never exercising it.
+      - run: npm run build:mcp
+
       - run: npx vitest run
 
       - name: Confirm the video suite was not silently skipped

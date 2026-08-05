@@ -42,11 +42,14 @@
   "engines": {
     "node": ">=20.11"
   },
+  "workspaces": [
+    "mcp"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && vitest run",
+    "test": "npm run build && npm run build:mcp && vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint .",
@@ -54,7 +57,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
-    "samples": "node scripts/make-samples.mjs"
+    "samples": "node scripts/make-samples.mjs",
+    "build:mcp": "npm run build -w image-and-video-compressor-mcp"
   },
   "dependencies": {
     "commander": "^15.0.0",
@@ -63,6 +67,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.17.0",
