@@ -64,7 +64,14 @@ export {
   type MuxerDetail,
 } from "./codecs/ffmpeg-capabilities.js";
 
-export { resolveFfmpeg, probeDuration, type FfmpegTools } from "./codecs/ffmpeg.js";
+export {
+  resolveFfmpeg,
+  probeDuration,
+  probeMedia,
+  parseProbe,
+  type FfmpegTools,
+  type MediaProbe,
+} from "./codecs/ffmpeg.js";
 export { resolveImageTarget } from "./codecs/image.js";
 export {
   buildVideoArgs,
@@ -72,6 +79,7 @@ export {
   buildScaleFilter,
   curatedArgs,
   validateSpeed,
+  resolveAudioBitrate,
 } from "./codecs/video.js";
 
 // --- Types: quality/dimension scales ---
@@ -114,6 +122,9 @@ export {
   qualityModelFor,
   mapQuality,
   codecSpec,
+  canCopyAudioInto,
+  defaultAudioBitrate,
+  AUDIO_STREAM_TO_ENCODER,
   type VideoContainer,
   type VideoOutputSpec,
   type VideoCodec,

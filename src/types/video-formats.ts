@@ -160,6 +160,42 @@ export const AUDIO_CODECS = {
 
 export type AudioCodec = keyof typeof AUDIO_CODECS;
 
+/**
+ * ffprobe stream names mapped to the encoder that produces them.
+ *
+ * The two vocabularies differ: a stream is `opus`, the encoder is `libopus`.
+ * Needed to decide whether an existing audio track can simply be copied into
+ * the target container instead of re-encoded.
+ */
+export const AUDIO_STREAM_TO_ENCODER: Record<string, AudioCodec> = {
+  aac: "aac",
+  opus: "libopus",
+  vorbis: "libvorbis",
+  mp3: "libmp3lame",
+  flac: "flac",
+};
+
+/** Default bitrate for an encoder, when it takes one. */
+export function defaultAudioBitrate(codec: AudioCodec): number | null {
+  const declared = AUDIO_CODECS[codec].defaultBitrate;
+  return declared === null ? null : Number.parseInt(declared, 10) * 1000;
+}
+
+/**
+ * True when an existing audio stream can be muxed into `container` untouched.
+ *
+ * Copying is strictly better than re-encoding when it is legal: no generation
+ * loss, no time spent, and no chance of the track growing.
+ */
+export function canCopyAudioInto(
+  container: VideoContainer,
+  streamCodec: string,
+): boolean {
+  const encoder = AUDIO_STREAM_TO_ENCODER[streamCodec.toLowerCase()];
+  if (!encoder) return false;
+  return (VIDEO_CONTAINERS[container].audio as readonly string[]).includes(encoder);
+}
+
 interface ContainerSpec {
   readonly video: readonly VideoCodec[];
   readonly audio: readonly AudioCodec[];

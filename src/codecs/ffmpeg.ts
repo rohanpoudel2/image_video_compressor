@@ -111,6 +111,75 @@ export async function probeDuration(
   });
 }
 
+export interface MediaProbe {
+  readonly durationSeconds: number | null;
+  /** Null when the source has no audio track at all. */
+  readonly audio: {
+    /** Stream codec name as ffprobe reports it, e.g. `aac`, not `libopus`. */
+    readonly codec: string;
+    /** Bits per second, or null when the container does not record it. */
+    readonly bitrate: number | null;
+  } | null;
+}
+
+/**
+ * Read duration and audio details in one ffprobe call.
+ *
+ * The audio side matters more than it looks. On short clips, or anything with
+ * mostly-static video, the audio track *is* the file — a 3-second SMPTE-bars
+ * clip here is 79% audio — so re-encoding it at a fixed bitrate higher than the
+ * source silently inflates the output past the original.
+ */
+export async function probeMedia(ffprobe: string, file: string): Promise<MediaProbe> {
+  const args = [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration:stream=codec_type,codec_name,bit_rate",
+    "-of",
+    "json",
+    file,
+  ];
+
+  const raw = await new Promise<string>((resolvePromise) => {
+    const child = spawn(ffprobe, args, { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    child.on("error", () => resolvePromise(""));
+    child.on("close", () => resolvePromise(out));
+  });
+
+  return parseProbe(raw);
+}
+
+interface ProbeJson {
+  format?: { duration?: string };
+  streams?: { codec_type?: string; codec_name?: string; bit_rate?: string }[];
+}
+
+export function parseProbe(raw: string): MediaProbe {
+  let parsed: ProbeJson;
+  try {
+    parsed = JSON.parse(raw) as ProbeJson;
+  } catch {
+    return { durationSeconds: null, audio: null };
+  }
+
+  const seconds = Number.parseFloat(parsed.format?.duration ?? "");
+  const audioStream = parsed.streams?.find((s) => s.codec_type === "audio");
+  const bitrate = Number.parseInt(audioStream?.bit_rate ?? "", 10);
+
+  return {
+    durationSeconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+    audio: audioStream?.codec_name
+      ? {
+          codec: audioStream.codec_name,
+          bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : null,
+        }
+      : null,
+  };
+}
+
 export interface RunFfmpegOptions {
   readonly ffmpeg: string;
   readonly args: readonly string[];

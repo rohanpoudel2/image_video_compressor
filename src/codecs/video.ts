@@ -1,6 +1,6 @@
 import { mkdir, stat, rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { runFfmpeg, probeDuration, type FfmpegTools } from "./ffmpeg.js";
+import { runFfmpeg, type FfmpegTools } from "./ffmpeg.js";
 import { CompressorError } from "../core/errors.js";
 import {
   VIDEO_CODECS,
@@ -101,11 +101,31 @@ function videoFlagsFor(codec: VideoCodec, speed: string | undefined): string[] {
   return flags;
 }
 
-const AUDIO_BITRATES: Record<string, string> = {
-  aac: "128k",
-  libopus: "96k",
-  libmp3lame: "192k",
-  libvorbis: "128k",
+/**
+ * Choose an audio bitrate that never exceeds what the source already spends.
+ *
+ * A fixed default inflates quiet or low-bitrate sources: a 70 kbps track
+ * re-encoded at a hardcoded 128 kbps grows by 80%, and on a short clip whose
+ * video compresses to almost nothing that alone can push the output past the
+ * original. Compression should never spend more bits than it was given.
+ */
+export function resolveAudioBitrate(
+  codec: string,
+  sourceBitrate: number | null,
+): string | null {
+  const fallback = DEFAULT_AUDIO_BITRATES[codec];
+  if (fallback === undefined) return null;
+  if (sourceBitrate === null) return `${fallback}k`;
+
+  const sourceKbps = Math.round(sourceBitrate / 1000);
+  return `${Math.max(32, Math.min(fallback, sourceKbps))}k`;
+}
+
+const DEFAULT_AUDIO_BITRATES: Record<string, number> = {
+  aac: 128,
+  libopus: 96,
+  libmp3lame: 192,
+  libvorbis: 128,
 };
 
 export interface BuildVideoArgsParams<C extends VideoContainer> {
@@ -119,6 +139,8 @@ export interface BuildVideoArgsParams<C extends VideoContainer> {
   readonly speed?: string | undefined;
   readonly fps?: number | undefined;
   readonly resize?: ResizeOptions | undefined;
+  /** Source audio bitrate in bits/sec, so the output never exceeds it. */
+  readonly sourceAudioBitrate?: number | null | undefined;
 }
 
 /**
@@ -142,7 +164,7 @@ export function buildVideoArgs<C extends VideoContainer>(
     audioCodec,
     quality: { flag: VIDEO_CODECS[codec].quality.flag, value: params.crf },
     extraVideoFlags: videoFlagsFor(codec, params.speed),
-    audioBitrate: AUDIO_BITRATES[audioCodec] ?? null,
+    audioBitrate: resolveAudioBitrate(audioCodec, params.sourceAudioBitrate ?? null),
     fps: params.fps,
     resize: params.resize,
     faststart: params.container === ".mp4" || params.container === ".mov",
@@ -161,6 +183,7 @@ export interface BuildOpenVideoArgsParams {
   readonly speed?: string | undefined;
   readonly fps?: number | undefined;
   readonly resize?: ResizeOptions | undefined;
+  readonly sourceAudioBitrate?: number | null | undefined;
 }
 
 /**
@@ -186,7 +209,9 @@ export function buildOpenVideoArgs(params: BuildOpenVideoArgsParams): string[] {
       : null,
     extraVideoFlags: known ? videoFlagsFor(codec, params.speed) : [],
     audioBitrate:
-      params.audioCodec === null ? null : (AUDIO_BITRATES[params.audioCodec] ?? null),
+      params.audioCodec === null
+        ? null
+        : resolveAudioBitrate(params.audioCodec, params.sourceAudioBitrate ?? null),
     fps: params.fps,
     resize: params.resize,
     faststart: [".mp4", ".mov", ".m4v"].includes(params.extension),
@@ -223,6 +248,7 @@ export function curatedArgs<C extends VideoContainer>(params: {
   speed?: string | undefined;
   fps?: number | undefined;
   resize?: ResizeOptions | undefined;
+  sourceAudioBitrate?: number | null | undefined;
 }): string[] {
   const codec = params.videoCodec;
   validateSpeed(codec, params.speed);
@@ -237,6 +263,7 @@ export function curatedArgs<C extends VideoContainer>(params: {
     speed: params.speed,
     fps: params.fps,
     resize: params.resize,
+    sourceAudioBitrate: params.sourceAudioBitrate,
   });
 }
 
@@ -277,6 +304,8 @@ export interface EncodeVideoParams {
   readonly outputPath: string;
   /** Pre-built argument vector from one of the builders above. */
   readonly args: readonly string[];
+  /** From the caller's probe, used to turn ffmpeg's clock into a percentage. */
+  readonly durationSeconds?: number | null | undefined;
   readonly onProgress?: ((ratio: number) => void) | undefined;
   readonly signal?: AbortSignal | undefined;
 }
@@ -289,17 +318,15 @@ export interface EncodeVideoResult {
 export async function encodeVideo(
   params: EncodeVideoParams,
 ): Promise<EncodeVideoResult> {
-  const { tools, inputPath, outputPath } = params;
+  const { tools, outputPath } = params;
 
   await mkdir(dirname(outputPath), { recursive: true });
-
-  const duration = tools.ffprobe ? await probeDuration(tools.ffprobe, inputPath) : null;
 
   try {
     await runFfmpeg({
       ffmpeg: tools.ffmpeg,
       args: params.args,
-      durationSeconds: duration,
+      durationSeconds: params.durationSeconds ?? null,
       ...(params.onProgress ? { onProgress: params.onProgress } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
     });

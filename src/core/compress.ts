@@ -7,11 +7,12 @@ import { CompressorError, toFailure } from "./errors.js";
 import { encodeImage, resolveImageTarget } from "../codecs/image.js";
 import { encodeVideo, curatedArgs, buildOpenVideoArgs } from "../codecs/video.js";
 import { muxerDetail, ffmpegCapabilities } from "../codecs/ffmpeg-capabilities.js";
-import { resolveFfmpeg, type FfmpegTools } from "../codecs/ffmpeg.js";
+import { resolveFfmpeg, probeMedia, type FfmpegTools } from "../codecs/ffmpeg.js";
 import { toQuality, type Quality } from "../types/brand.js";
 import {
   defaultAudioCodec,
   defaultVideoCodec,
+  canCopyAudioInto,
   isCodecAllowedIn,
   isVideoContainer,
   VIDEO_CONTAINERS,
@@ -376,15 +377,22 @@ async function runVideoJob(
   }
 
   const extension = job.targetFormat;
+
+  // One probe serves both the progress percentage and the audio decision.
+  const probe = ctx.tools.ffprobe
+    ? await probeMedia(ctx.tools.ffprobe, job.inputPath)
+    : { durationSeconds: null, audio: null };
+
   const args = isVideoContainer(extension)
-    ? curatedArgsFor(extension, job, ctx)
-    : await openArgsFor(extension, job, ctx);
+    ? curatedArgsFor(extension, job, ctx, probe.audio)
+    : await openArgsFor(extension, job, ctx, probe.audio);
 
   const encoded = await encodeVideo({
     tools: ctx.tools,
     inputPath: job.inputPath,
     outputPath: job.outputPath,
     args,
+    durationSeconds: probe.durationSeconds,
     ...(ctx.options.onProgress
       ? {
           onProgress: (ratio: number) =>
@@ -406,9 +414,10 @@ function curatedArgsFor(
   container: VideoContainer,
   job: CompressionJob,
   ctx: ExecuteContext,
+  sourceAudio: SourceAudio,
 ): string[] {
   const videoCodec = resolveVideoCodec(container, ctx.options.videoCodec);
-  const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec);
+  const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec, sourceAudio);
 
   return curatedArgs({
     inputPath: job.inputPath,
@@ -421,6 +430,7 @@ function curatedArgsFor(
     speed: ctx.options.preset,
     fps: ctx.options.fps,
     resize: ctx.options.resize,
+    sourceAudioBitrate: sourceAudio?.bitrate ?? null,
   });
 }
 
@@ -436,6 +446,7 @@ async function openArgsFor(
   extension: string,
   job: CompressionJob,
   ctx: ExecuteContext,
+  sourceAudio: SourceAudio,
 ): Promise<string[]> {
   const ffmpeg = ctx.tools?.ffmpeg ?? "ffmpeg";
   const muxer = extension.slice(1);
@@ -474,6 +485,7 @@ async function openArgsFor(
     speed: ctx.options.preset,
     fps: ctx.options.fps,
     resize: ctx.options.resize,
+    sourceAudioBitrate: sourceAudio?.bitrate ?? null,
   });
 }
 
@@ -502,11 +514,42 @@ function resolveVideoCodec(
   return requested as VideoCodec;
 }
 
+/** What ffprobe found on the source's audio track, if it has one. */
+type SourceAudio = { readonly codec: string; readonly bitrate: number | null } | null;
+
+/**
+ * Pick an audio codec, preferring to copy the existing track.
+ *
+ * Re-encoding audio that the target container could carry untouched costs a
+ * generation of quality, costs time, and can make the file bigger — a 70 kbps
+ * AAC track re-encoded at a fixed 128 kbps grows by 80%. Copying is free and
+ * lossless whenever it is legal, so it is the default; an explicit
+ * `--audio-codec` still wins.
+ */
 function resolveAudioCodec(
   container: VideoContainer,
   requested: string | undefined,
+  sourceAudio: SourceAudio = null,
 ): AudioCodec {
-  if (requested === undefined) return defaultAudioCodec(container);
+  if (requested === undefined) {
+    if (sourceAudio && canCopyAudioInto(container, sourceAudio.codec)) {
+      return "copy";
+    }
+    return defaultAudioCodec(container);
+  }
+
+  // `copy` is not an encoder, so it is not in the container's encoder list. It
+  // is legal whenever the *source stream* is something the container accepts.
+  if (requested === "copy") {
+    if (sourceAudio && !canCopyAudioInto(container, sourceAudio.codec)) {
+      throw new CompressorError(
+        "INVALID_OPTION",
+        `${VIDEO_CONTAINERS[container].label} cannot carry a ${sourceAudio.codec} stream, so its audio must be re-encoded.\n` +
+          `Drop --audio-codec copy, or choose one of: ${VIDEO_CONTAINERS[container].audio.filter((c) => c !== "copy").join(", ")}.`,
+      );
+    }
+    return "copy";
+  }
 
   const allowed = VIDEO_CONTAINERS[container].audio as readonly string[];
   if (!allowed.includes(requested)) {
