@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "image-and-video-compressor": "^2.0.2",
+    "image-and-video-compressor": "^2.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
