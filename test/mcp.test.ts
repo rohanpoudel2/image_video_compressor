@@ -203,6 +203,31 @@ describe.skipIf(!built)("mcp server", () => {
     expect(probe.video).toBeUndefined();
   });
 
+  it("phrases errors in parameters an agent can actually pass", async () => {
+    // Two same-named files in different directories collide on one output
+    // path. The library's advice for that is "Use --recursive", which is good
+    // CLI guidance and unusable here: there is no CLI, and passing a parameter
+    // named "--recursive" is a schema error.
+    const left = join(fixtures, "collide-a");
+    const right = join(fixtures, "collide-b");
+    await makeImage(join(left, "same.png"), { width: 120, height: 90 });
+    await makeImage(join(right, "same.png"), { width: 130, height: 100 });
+
+    const result = await client.callTool({
+      name: "compress_media",
+      arguments: {
+        paths: [left, right],
+        kind: "image",
+        outDir: join(fixtures, "collide-out"),
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const { message } = text<{ message: string }>(result);
+    expect(message).not.toMatch(/--[a-z]/);
+    expect(message).toContain("recursive");
+  });
+
   it("rejects arguments that violate the schema", async () => {
     const result = await client.callTool({
       name: "compress_media",

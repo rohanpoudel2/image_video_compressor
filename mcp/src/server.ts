@@ -35,6 +35,48 @@ function errorCode(err: unknown): string {
 }
 
 /**
+ * CLI flag names, as they appear in library error messages, mapped to the
+ * parameters this server actually accepts.
+ *
+ * The messages are good advice written for the CLI — "Use --recursive to
+ * preserve the directory structure" — but an agent has no CLI. Following that
+ * literally means passing a parameter called `--recursive` and getting a schema
+ * error, so the remedy the message offers is unreachable. Longest first, so
+ * `--audio-codec` is not clipped by `--codec`.
+ */
+const CLI_FLAG_TO_PARAMETER: readonly (readonly [string, string])[] = [
+  ["--no-skip-larger", "skipLarger: false"],
+  ["--audio-codec", "audioCodec"],
+  ["--ffmpeg-path", "ffmpegPath"],
+  ["--concurrency", "concurrency"],
+  ["--max-height", "maxHeight"],
+  ["--max-width", "maxWidth"],
+  ["--overwrite", "overwrite"],
+  ["--recursive", "recursive"],
+  ["--dry-run", "dryRun"],
+  ["--quality", "quality"],
+  ["--output", "to"],
+  ["--preset", "preset"],
+  ["--codec", "videoCodec"],
+  ["--out", "outDir"],
+  ["--fps", "fps"],
+  ["--to", "to"],
+];
+
+/** Rewrite a library message so its advice is actionable through this server. */
+function forAgent(message: string): string {
+  let out = message.replace(
+    /`?imgvidcompress formats`?/g,
+    "the list_capabilities tool",
+  );
+  for (const [flag, parameter] of CLI_FLAG_TO_PARAMETER) {
+    // \b stops `--out` from turning `--output` into `outDirput`.
+    out = out.replace(new RegExp(`${flag}\\b`, "g"), parameter);
+  }
+  return out;
+}
+
+/**
  * Every tool returns JSON as text content.
  *
  * Deliberately *not* an `outputSchema` with `structuredContent`: the report
@@ -53,7 +95,7 @@ function failure(message: string, code = "TOOL_ERROR") {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify({ ok: false, code, message }, null, 2),
+        text: JSON.stringify({ ok: false, code, message: forAgent(message) }, null, 2),
       },
     ],
   };
@@ -80,7 +122,7 @@ function summarise(report: CompressionReport) {
             // "output-exists" skip that does not say WHICH file collided
             // sends the caller hunting through the output directory.
             outputPath: result.outputPath,
-            error: { code: result.error.code, message: result.error.message },
+            error: { code: result.error.code, message: forAgent(result.error.message) },
           }
         : result.status === "skipped"
           ? {
