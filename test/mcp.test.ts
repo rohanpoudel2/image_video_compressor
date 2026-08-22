@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { existsSync } from "node:fs";
-import { copyFile } from "node:fs/promises";
+import { copyFile, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -75,6 +75,14 @@ describe.skipIf(!built)("mcp server", () => {
     }
   });
 
+  it("advertises the MCP package version", async () => {
+    const manifest = JSON.parse(
+      await readFile(join(root, "mcp", "package.json"), "utf8"),
+    ) as { version: string };
+
+    expect(client.getServerVersion()?.version).toBe(manifest.version);
+  });
+
   it("exposes every library option through compress_media", async () => {
     const { tools } = await client.listTools();
     const schema = tools.find((tool) => tool.name === "compress_media")!.inputSchema;
@@ -108,14 +116,34 @@ describe.skipIf(!built)("mcp server", () => {
   });
 
   it("reports capabilities actually present on this machine", async () => {
-    const caps = text<{ image: { write: { extensions: string[] }[] } }>(
-      await client.callTool({ name: "list_capabilities", arguments: {} }),
-    );
+    const caps = text<{
+      image: { write: { extensions: string[] }[] };
+      video:
+        | { available: false }
+        | {
+            available: true;
+            muxerCount: number;
+            videoEncoderCount: number;
+            audioEncoderCount: number;
+            muxers: string[];
+            videoEncoders: string[];
+            audioEncoders: string[];
+          };
+    }>(await client.callTool({ name: "list_capabilities", arguments: {} }));
 
     expect(caps.image.write.length).toBeGreaterThan(0);
     // WebP is the default output format; if it is missing the tool is unusable.
     const extensions = caps.image.write.flatMap((format) => format.extensions);
     expect(extensions).toContain(".webp");
+
+    if (caps.video.available) {
+      expect(caps.video.muxers).toHaveLength(caps.video.muxerCount);
+      expect(caps.video.videoEncoders).toHaveLength(caps.video.videoEncoderCount);
+      expect(caps.video.audioEncoders).toHaveLength(caps.video.audioEncoderCount);
+      expect(caps.video.muxers).toEqual([...caps.video.muxers].sort());
+      expect(caps.video.videoEncoders.length).toBeGreaterThan(0);
+      expect(caps.video.audioEncoders.length).toBeGreaterThan(0);
+    }
   });
 
   it("never writes anything on a dry run", async () => {

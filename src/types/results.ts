@@ -1,10 +1,5 @@
 import type { ImageOutputFormat } from "./image-formats.js";
-import type {
-  VideoContainer,
-  VideoOutputSpec,
-  VideoCodec,
-  AudioCodec,
-} from "./video-formats.js";
+import type { VideoOutputSpec, VideoCodec, AudioCodec } from "./video-formats.js";
 import type { Pixels, Quality } from "./brand.js";
 
 export type MediaKind = "image" | "video";
@@ -15,7 +10,7 @@ export interface CompressionJob {
   readonly inputPath: string;
   readonly outputPath: string;
   readonly inputBytes: number;
-  readonly targetFormat: ImageOutputFormat | VideoContainer;
+  readonly targetFormat: ImageOutputFormat | VideoOutputSpec;
 }
 
 export type SkipReason =
@@ -164,8 +159,9 @@ export interface ImageTuning {
 }
 
 export interface VideoTuning {
-  readonly videoCodec?: VideoCodec;
-  readonly audioCodec?: AudioCodec;
+  /** Curated codecs are suggestions; runtime ffmpeg encoders are also accepted. */
+  readonly videoCodec?: VideoCodec | (string & {});
+  readonly audioCodec?: AudioCodec | (string & {});
   /**
    * Cap the frame rate. Omitted by default — v1 forced every video to 30fps,
    * quietly ruining 24fps film and 60fps footage.
@@ -197,7 +193,7 @@ export interface VideoOptions extends CommonOptions, VideoTuning {
  * `VideoOptions` assignable to this while each stays strict on its own.
  */
 export interface CompressOptions extends CommonOptions, ImageTuning, VideoTuning {
-  readonly to?: ImageOutputFormat | VideoContainer;
+  readonly to?: ImageOutputFormat | VideoOutputSpec;
 }
 
 export type ProgressEvent =
@@ -206,7 +202,12 @@ export type ProgressEvent =
    * The total is not knowable until then, which is why it arrives as an event
    * rather than as a constructor argument to the renderer.
    */
-  | { readonly type: "run-start"; readonly total: number }
+  | {
+      readonly type: "run-start";
+      readonly total: number;
+      /** Run-level substitutions or other non-fatal setup notes. */
+      readonly warnings?: Warnings;
+    }
   | { readonly type: "job-start"; readonly job: CompressionJob }
   | {
       readonly type: "job-progress";

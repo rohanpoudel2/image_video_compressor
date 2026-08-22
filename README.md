@@ -148,13 +148,13 @@ Concurrency defaults differ by media kind, because the two libraries behave diff
 
 **Video options**
 
-| Option                 | Default                     | Description                                                                                                                     |
-| ---------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `--codec <name>`       | per container               | `libx264`, `libx265`, `libvpx-vp9`, `libvpx`, `libsvtav1`, `libaom-av1`, `mpeg4`, `libtheora`. Must be legal for the container. |
-| `--audio-codec <name>` | per container               | `aac`, `libopus`, or `copy` to pass the original track through.                                                                 |
-| `--fps <n>`            | source rate                 | Cap the frame rate. Left alone by default.                                                                                      |
-| `--preset <name>`      | per codec                   | Encoder speed/efficiency tradeoff. Codec-specific.                                                                              |
-| `--ffmpeg-path <path>` | `$FFMPEG_PATH`, then `PATH` | Path to the ffmpeg binary.                                                                                                      |
+| Option                 | Default                     | Description                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--codec <name>`       | per container               | Any video encoder this ffmpeg reports for open-tier containers. Curated suggestions: `libx264`, `libx265`, `libvpx-vp9`, `libvpx`, `libsvtav1`, `libaom-av1`, `mpeg4`, `libtheora`; curated containers enforce the matrix below. |
+| `--audio-codec <name>` | per container               | `aac`, `libopus`, `libmp3lame`, `libvorbis`, `flac`, or `copy` to pass compatible source tracks through. The target container and local ffmpeg build are both checked.                                                           |
+| `--fps <n>`            | source rate                 | Cap the frame rate. Left alone by default.                                                                                                                                                                                       |
+| `--preset <name>`      | per codec                   | Encoder speed/efficiency tradeoff. Codec-specific.                                                                                                                                                                               |
+| `--ffmpeg-path <path>` | `$FFMPEG_PATH`, then `PATH` | Path to the ffmpeg binary.                                                                                                                                                                                                       |
 
 ### Examples
 
@@ -203,7 +203,9 @@ imgvidcompress formats --json   # machine-readable
 | `.avi`    | H.264, MPEG-4               | MP3                          |
 | `.ogv`    | Theora                      | Vorbis, Opus                 |
 
-Beyond those, **any muxer your ffmpeg reports is a valid `--to`**. A stock Homebrew build carries 184 of them, with around 100 video encoders available to `--codec`. For an uncurated container the muxer's own defaults apply, which are muxable by construction.
+Beyond those, **any muxer your ffmpeg reports is a valid `--to`**, and `--codec` accepts any video encoder that build reports instead of imposing a fixed CLI list. A stock Homebrew build carries 184 muxers and around 100 video encoders. For an uncurated container the muxer's own defaults apply when no codec is requested, which are muxable by construction.
+
+Before the worker pool starts, the run checks every planned codec against that ffmpeg build. A missing explicitly requested encoder fails once with the available alternatives; if a container's default encoder is missing, an available legal codec is substituted and reported as a warning.
 
 WebM genuinely cannot carry H.264. For curated containers that restriction is enforced by the compiler rather than by a runtime check: an impossible pairing is a build error in library code and a clear message on the CLI.
 

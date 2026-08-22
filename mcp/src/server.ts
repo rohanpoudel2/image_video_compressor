@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -26,6 +27,9 @@ import {
   type CompressOptions,
   type CompressionReport,
 } from "image-and-video-compressor";
+
+const require = createRequire(import.meta.url);
+const MCP_VERSION = (require("../package.json") as { version: string }).version;
 
 /** Library errors carry a stable `code`; anything else is unknown. */
 function errorCode(err: unknown): string {
@@ -148,7 +152,7 @@ function summarise(report: CompressionReport) {
 
 export function createServer(): McpServer {
   const server = new McpServer(
-    { name: "image-and-video-compressor", version: "0.1.0" },
+    { name: "image-and-video-compressor", version: MCP_VERSION },
     {
       instructions:
         "Compress images and videos on this machine. Compression never modifies the " +
@@ -254,7 +258,9 @@ export function createServer(): McpServer {
         audioCodec: z
           .string()
           .optional()
-          .describe("Audio encoder: 'aac', 'libopus', or 'copy'."),
+          .describe(
+            "Audio encoder, e.g. 'aac', 'libopus', 'libmp3lame', 'libvorbis', 'flac', or 'copy'.",
+          ),
         fps: z
           .number()
           .int()
@@ -681,6 +687,9 @@ export function createServer(): McpServer {
             muxerCount: caps.muxers.size,
             videoEncoderCount: caps.videoEncoders.size,
             audioEncoderCount: caps.audioEncoders.size,
+            muxers: [...caps.muxers.keys()].sort(),
+            videoEncoders: [...caps.videoEncoders].sort(),
+            audioEncoders: [...caps.audioEncoders].sort(),
           },
         });
       } catch {
