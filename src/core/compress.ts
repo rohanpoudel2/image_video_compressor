@@ -115,8 +115,9 @@ async function run(
   }
 
   const needsVideo = files.some((f) => f.kind === "video");
-  const tools: FfmpegTools | null =
-    needsVideo && !dryRun ? await resolveFfmpeg(options.ffmpegPath) : null;
+  const tools: FfmpegTools | null = needsVideo
+    ? await resolveFfmpeg(options.ffmpegPath)
+    : null;
 
   const jobs = await Promise.all(
     files.map((file) => planJob(file, options, outDir, kind === null)),
@@ -452,20 +453,9 @@ async function executeJob(
   job: CompressionJob,
   ctx: ExecuteContext,
 ): Promise<JobResult> {
-  const { kind, inputPath, outputPath, inputBytes } = job;
+  const { kind, inputPath, outputPath, inputBytes, targetFormat } = job;
 
   try {
-    if (ctx.dryRun) {
-      return {
-        status: "skipped",
-        kind,
-        inputPath,
-        outputPath,
-        inputBytes,
-        reason: "dry-run",
-      };
-    }
-
     if (!(ctx.options.overwrite ?? false) && (await exists(outputPath))) {
       return {
         status: "skipped",
@@ -473,15 +463,49 @@ async function executeJob(
         inputPath,
         outputPath,
         inputBytes,
+        targetFormat,
         reason: "output-exists",
       };
     }
 
-    const startedAt = performance.now();
-    const { bytes: outputBytes, warnings } =
-      kind === "image" ? await runImageJob(job, ctx) : await runVideoJob(job, ctx);
+    if (ctx.dryRun) {
+      const prepared =
+        kind === "video" ? await prepareVideoJob(job, ctx, job.outputPath) : null;
+      const warnings = prepared?.warnings ?? [];
 
-    const notes = warnings.length > 0 ? { warnings } : {};
+      return {
+        status: "skipped",
+        kind,
+        inputPath,
+        outputPath,
+        inputBytes,
+        targetFormat,
+        reason: "dry-run",
+        ...(prepared
+          ? {
+              videoCodec: prepared.videoCodec,
+              audioCodec: prepared.audioCodec,
+            }
+          : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
+    }
+
+    const startedAt = performance.now();
+    const output =
+      kind === "image" ? await runImageJob(job, ctx) : await runVideoJob(job, ctx);
+    const { bytes: outputBytes, warnings } = output;
+
+    const notes = {
+      targetFormat,
+      ...(output.videoCodec !== undefined
+        ? {
+            videoCodec: output.videoCodec,
+            audioCodec: output.audioCodec ?? null,
+          }
+        : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
+    };
 
     // `null` signals the encoder declined to write because it grew the file.
     if (outputBytes === null) {
@@ -511,7 +535,14 @@ async function executeJob(
     };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw err;
-    return { status: "failed", kind, inputPath, outputPath, error: toFailure(err) };
+    return {
+      status: "failed",
+      kind,
+      inputPath,
+      outputPath,
+      targetFormat,
+      error: toFailure(err),
+    };
   }
 }
 
@@ -519,6 +550,8 @@ async function executeJob(
 interface JobOutput {
   readonly bytes: number | null;
   readonly warnings: string[];
+  readonly videoCodec?: string | null;
+  readonly audioCodec?: string | null;
 }
 
 async function runImageJob(
@@ -555,6 +588,64 @@ async function runVideoJob(
     );
   }
 
+  return withAtomicOutput<JobOutput>(job.outputPath, async (temporaryPath) => {
+    const prepared = await prepareVideoJob(job, ctx, temporaryPath);
+
+    const encoded = await encodeVideo({
+      tools,
+      inputPath: job.inputPath,
+      outputPath: temporaryPath,
+      args: prepared.args,
+      durationSeconds: prepared.durationSeconds,
+      ...(ctx.options.onProgress
+        ? {
+            onProgress: (ratio: number) =>
+              ctx.options.onProgress?.({ type: "job-progress", job, ratio }),
+          }
+        : {}),
+      ...(ctx.options.signal ? { signal: ctx.options.signal } : {}),
+    });
+
+    const result = {
+      warnings: prepared.warnings,
+      videoCodec: prepared.videoCodec,
+      audioCodec: prepared.audioCodec,
+    };
+
+    if (ctx.skipLarger && encoded.bytes >= job.inputBytes) {
+      return { value: { bytes: null, ...result }, replace: false };
+    }
+    return { value: { bytes: encoded.bytes, ...result }, replace: true };
+  });
+}
+
+interface PreparedVideoJob {
+  readonly args: string[];
+  readonly durationSeconds: number | null;
+  readonly warnings: string[];
+  readonly videoCodec: string | null;
+  readonly audioCodec: string | null;
+}
+
+/**
+ * Resolve everything an encode needs without running one.
+ *
+ * Split out so a dry run can report the codecs and stream drops a real run
+ * would produce. `outputPath` is the staging file for a real encode, and the
+ * final destination for a plan, whose args are never executed.
+ */
+async function prepareVideoJob(
+  job: CompressionJob,
+  ctx: ExecuteContext,
+  outputPath: string,
+): Promise<PreparedVideoJob> {
+  if (!ctx.tools) {
+    throw new CompressorError(
+      "FFMPEG_NOT_FOUND",
+      "ffmpeg is required to compress video.",
+    );
+  }
+
   const extension = job.targetFormat;
 
   // One probe serves the progress percentage, the audio decision, and which
@@ -567,37 +658,15 @@ async function runVideoJob(
     ? planStreams(extension, probe)
     : { plan: openStreamPlan(probe), dropped: [] as string[] };
 
-  return withAtomicOutput<JobOutput>(job.outputPath, async (temporaryPath) => {
-    const args = isVideoContainer(extension)
-      ? curatedArgsFor(extension, job, ctx, probe, plan.plan, temporaryPath)
-      : await openArgsFor(extension, job, ctx, probe, plan.plan, temporaryPath);
+  const prepared = isVideoContainer(extension)
+    ? prepareCuratedVideo(extension, job, ctx, probe, plan.plan, outputPath)
+    : await prepareOpenVideo(extension, job, ctx, probe, plan.plan, outputPath);
 
-    const encoded = await encodeVideo({
-      tools,
-      inputPath: job.inputPath,
-      outputPath: temporaryPath,
-      args,
-      durationSeconds: probe.durationSeconds,
-      ...(ctx.options.onProgress
-        ? {
-            onProgress: (ratio: number) =>
-              ctx.options.onProgress?.({ type: "job-progress", job, ratio }),
-          }
-        : {}),
-      ...(ctx.options.signal ? { signal: ctx.options.signal } : {}),
-    });
-
-    if (ctx.skipLarger && encoded.bytes >= job.inputBytes) {
-      return {
-        value: { bytes: null, warnings: plan.dropped },
-        replace: false,
-      };
-    }
-    return {
-      value: { bytes: encoded.bytes, warnings: plan.dropped },
-      replace: true,
-    };
-  });
+  return {
+    ...prepared,
+    durationSeconds: probe.durationSeconds,
+    warnings: plan.dropped,
+  };
 }
 
 const EMPTY_PROBE: MediaProbe = {
@@ -678,15 +747,21 @@ function describeStream(stream: {
   return parts.length > 0 ? ` (${parts.join(": ")})` : "";
 }
 
+interface PreparedVideoArgs {
+  readonly args: string[];
+  readonly videoCodec: string | null;
+  readonly audioCodec: string | null;
+}
+
 /** Curated container: typed codec matrix and tuned per-codec flags. */
-function curatedArgsFor(
+function prepareCuratedVideo(
   container: VideoContainer,
   job: CompressionJob,
   ctx: ExecuteContext,
   probe: MediaProbe,
   plan: StreamPlan | null,
   outputPath: string,
-): string[] {
+): PreparedVideoArgs {
   const selected = ctx.codecs.get(container);
   const videoCodec = (selected?.videoCodec ??
     resolveVideoCodec(container, ctx.options.videoCodec)) as VideoCodec;
@@ -697,20 +772,24 @@ function curatedArgsFor(
     (selected?.audioCodec as AudioCodec | null | undefined) ?? undefined,
   );
 
-  return curatedArgs({
-    inputPath: job.inputPath,
-    outputPath,
-    container,
-    // Checked against the container's own matrix by the resolvers above.
-    videoCodec: videoCodec,
-    audioCodec: audioCodec,
-    quality: ctx.quality,
-    speed: ctx.options.preset,
-    fps: ctx.options.fps,
-    resize: ctx.options.resize,
-    sourceAudioBitrates: probe.audio.map((a) => a.bitrate),
-    streams: plan,
-  });
+  return {
+    args: curatedArgs({
+      inputPath: job.inputPath,
+      outputPath,
+      container,
+      // Checked against the container's own matrix by the resolvers above.
+      videoCodec,
+      audioCodec,
+      quality: ctx.quality,
+      speed: ctx.options.preset,
+      fps: ctx.options.fps,
+      resize: ctx.options.resize,
+      sourceAudioBitrates: probe.audio.map((a) => a.bitrate),
+      streams: plan,
+    }),
+    videoCodec,
+    audioCodec,
+  };
 }
 
 /**
@@ -721,14 +800,14 @@ function curatedArgsFor(
  * `--codec` is checked against the encoder list first, so a typo fails with a
  * clear message instead of a wall of ffmpeg stderr.
  */
-async function openArgsFor(
+async function prepareOpenVideo(
   extension: string,
   job: CompressionJob,
   ctx: ExecuteContext,
   probe: MediaProbe,
   plan: StreamPlan | null,
   outputPath: string,
-): Promise<string[]> {
+): Promise<PreparedVideoArgs> {
   const ffmpeg = ctx.tools?.ffmpeg ?? "ffmpeg";
   const muxer = extension.slice(1);
   const detail = await muxerDetail(ffmpeg, muxer);
@@ -745,21 +824,27 @@ async function openArgsFor(
   }
 
   const selected = ctx.codecs.get(extension);
+  const videoCodec = selected?.videoCodec ?? ctx.options.videoCodec ?? null;
+  const audioCodec = selected?.audioCodec ?? ctx.options.audioCodec ?? null;
 
-  return buildOpenVideoArgs({
-    inputPath: job.inputPath,
-    outputPath,
-    extension,
-    // null means "let ffmpeg decide", which is always a legal choice.
-    videoCodec: selected?.videoCodec ?? ctx.options.videoCodec ?? null,
-    audioCodec: selected?.audioCodec ?? ctx.options.audioCodec ?? null,
-    quality: ctx.quality,
-    speed: ctx.options.preset,
-    fps: ctx.options.fps,
-    resize: ctx.options.resize,
-    sourceAudioBitrates: probe.audio.map((a) => a.bitrate),
-    streams: plan,
-  });
+  return {
+    args: buildOpenVideoArgs({
+      inputPath: job.inputPath,
+      outputPath,
+      extension,
+      // null means "let ffmpeg decide", which is always a legal choice.
+      videoCodec,
+      audioCodec,
+      quality: ctx.quality,
+      speed: ctx.options.preset,
+      fps: ctx.options.fps,
+      resize: ctx.options.resize,
+      sourceAudioBitrates: probe.audio.map((a) => a.bitrate),
+      streams: plan,
+    }),
+    videoCodec: videoCodec ?? detail?.defaultVideoCodec ?? null,
+    audioCodec: audioCodec ?? detail?.defaultAudioCodec ?? null,
+  };
 }
 
 /**
@@ -861,6 +946,8 @@ export function summarise(
   let compressed = 0;
   let skipped = 0;
   let failed = 0;
+  let planned = 0;
+  let plannedInputBytes = 0;
   let inputBytes = 0;
   let outputBytes = 0;
 
@@ -873,6 +960,10 @@ export function summarise(
         break;
       case "skipped":
         skipped++;
+        if (result.reason === "dry-run") {
+          planned++;
+          plannedInputBytes += result.inputBytes;
+        }
         break;
       case "failed":
         failed++;
@@ -886,6 +977,8 @@ export function summarise(
     compressed,
     skipped,
     failed,
+    planned,
+    plannedInputBytes,
     inputBytes,
     outputBytes,
     savedBytes,

@@ -13,6 +13,15 @@ export interface CompressionJob {
   readonly targetFormat: ImageOutputFormat | VideoOutputSpec;
 }
 
+/** Output settings resolved for one file before it is encoded. */
+export interface ResolvedJobSettings {
+  readonly targetFormat: ImageOutputFormat | VideoOutputSpec;
+  /** Present for video once the encoder choice has been resolved. */
+  readonly videoCodec?: string | null;
+  /** Present for video once copy-versus-encode has been resolved. */
+  readonly audioCodec?: string | null;
+}
+
 export type SkipReason =
   /** The compressed result was bigger than the original, so we kept the original. */
   | "output-larger-than-input"
@@ -66,7 +75,7 @@ export type JobResult =
  */
 export type Warnings = readonly string[];
 
-export interface CompressedResult {
+export interface CompressedResult extends ResolvedJobSettings {
   readonly kind: MediaKind;
   readonly inputPath: string;
   readonly outputPath: string;
@@ -80,7 +89,7 @@ export interface CompressedResult {
   readonly warnings?: Warnings;
 }
 
-export interface SkippedResult {
+export interface SkippedResult extends ResolvedJobSettings {
   readonly kind: MediaKind;
   readonly inputPath: string;
   readonly outputPath: string;
@@ -89,7 +98,7 @@ export interface SkippedResult {
   readonly warnings?: Warnings;
 }
 
-export interface FailedResult {
+export interface FailedResult extends ResolvedJobSettings {
   readonly kind: MediaKind;
   readonly inputPath: string;
   readonly outputPath: string;
@@ -112,6 +121,10 @@ export interface CompressionSummary {
   readonly compressed: number;
   readonly skipped: number;
   readonly failed: number;
+  /** Files a dry run determined would reach an encoder. */
+  readonly planned: number;
+  /** Source bytes for files counted by `planned`; never an output estimate. */
+  readonly plannedInputBytes: number;
   readonly inputBytes: number;
   readonly outputBytes: number;
   readonly savedBytes: number;

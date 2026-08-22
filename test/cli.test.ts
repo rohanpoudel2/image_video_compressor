@@ -132,7 +132,7 @@ describe("CLI", () => {
   });
 
   describe("dry run", () => {
-    it("plans without writing anything", async () => {
+    it("emits one JSON plan without writing anything", async () => {
       const src = join(dir, "dry");
       const out = join(dir, "dry-out");
       await makeImage(join(src, "a.png"));
@@ -140,14 +140,57 @@ describe("CLI", () => {
       const result = await runCli([src, "--out", out, "--dry-run", "--json"]);
       const parsed = JSON.parse(result.stdout) as {
         dryRun: boolean;
-        results: { status: string; reason?: string; outputPath: string }[];
+        summary: { planned: number; plannedInputBytes: number; savedBytes: number };
+        results: {
+          status: string;
+          reason?: string;
+          outputPath: string;
+          targetFormat: string;
+        }[];
       };
 
       expect(parsed.dryRun).toBe(true);
+      expect(parsed.summary.planned).toBe(1);
+      expect(parsed.summary.plannedInputBytes).toBeGreaterThan(0);
+      expect(parsed.summary.savedBytes).toBe(0);
       expect(parsed.results[0]?.reason).toBe("dry-run");
       // The planned destination is still reported, so a caller can preview it.
       expect(parsed.results[0]?.outputPath).toContain("a.webp");
+      expect(parsed.results[0]?.targetFormat).toBe(".webp");
       await expect(access(out)).rejects.toThrow();
+    });
+
+    it("fails the plan when its required ffmpeg is unavailable", async () => {
+      const src = join(dir, "dry-no-ffmpeg");
+      await makeCorruptImage(join(src, "clip.mp4"));
+
+      const result = await runCli([
+        "video",
+        src,
+        "--dry-run",
+        "--json",
+        "--ffmpeg-path",
+        join(dir, "missing-ffmpeg"),
+      ]);
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        error: { code: string };
+      };
+
+      expect(parsed.ok).toBe(false);
+      expect(parsed.error.code).toBe("FFMPEG_NOT_FOUND");
+      expect(result.exitCode).toBe(3);
+    });
+
+    it("shows resolved settings in human-readable plans", async () => {
+      const src = join(dir, "dry-human");
+      await makeImage(join(src, "a.png"));
+
+      const result = await runCli([src, "--dry-run", "--no-color"]);
+
+      expect(result.stderr).toContain("a.webp");
+      expect(result.stderr).toContain(".webp");
+      expect(result.stderr).toMatch(/planned/i);
     });
   });
 

@@ -170,7 +170,28 @@ describe("compression behaviour", () => {
 
     expect(report.dryRun).toBe(true);
     expect(report.summary.skipped).toBe(1);
+    expect(report.summary.planned).toBe(1);
+    expect(report.summary.plannedInputBytes).toBeGreaterThan(0);
+    expect(report.summary.inputBytes).toBe(0);
+    expect(report.summary.savedBytes).toBe(0);
     await expect(access(out)).rejects.toThrow();
+  });
+
+  it("reports an existing output as skipped in a dry run", async () => {
+    const src = join(dir, "dry-existing");
+    const out = join(dir, "dry-existing-out");
+    await makeImage(join(src, "a.png"));
+    await makeImage(join(out, "a.webp"), { format: "webp" });
+
+    const report = await compressImages([src], { outDir: out, dryRun: true });
+
+    expect(report.results[0]).toMatchObject({
+      status: "skipped",
+      reason: "output-exists",
+      targetFormat: ".webp",
+    });
+    expect(report.summary.planned).toBe(0);
+    expect(report.summary.plannedInputBytes).toBe(0);
   });
 
   it("skips an existing output unless --overwrite", async () => {
