@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 
 import { tempDir, makeVideo, hasFfmpeg } from "./helpers.js";
 import { compressVideos } from "../src/core/compress.js";
@@ -40,6 +41,12 @@ function probeStream(
 /** Read a stream's codec name back out of the encoded file. */
 function probeCodec(file: string, stream: "v" | "a"): Promise<string> {
   return probeStream(file, "codec_name", stream);
+}
+
+async function temporaryFiles(dir: string): Promise<string[]> {
+  return (await readdir(dir)).filter(
+    (name) => name.startsWith(".") && name.includes(".tmp."),
+  );
 }
 
 describe("video argument construction", () => {
@@ -153,10 +160,11 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
 
   it("encodes an MP4 with H.264", async () => {
     const src = join(dir, "mp4");
+    const out = join(dir, "mp4-out");
     await makeVideo(join(src, "clip.mp4"));
 
     const report = await compressVideos([src], {
-      outDir: join(dir, "mp4-out"),
+      outDir: out,
       quality: toQuality(50),
       // A 1s clip is mostly audio, so the re-encode can be larger than the
       // source and skip-larger would decline to write it. This test is about
@@ -165,7 +173,76 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
     });
 
     expect(report.summary.failed).toBe(0);
-    expect(await probeCodec(join(dir, "mp4-out", "clip.mp4"), "v")).toBe("h264");
+    expect(await probeCodec(join(out, "clip.mp4"), "v")).toBe("h264");
+    expect(await temporaryFiles(out)).toEqual([]);
+  }, 120_000);
+
+  it("preserves an existing output when ffmpeg fails", async () => {
+    const src = join(dir, "atomic-failure");
+    const out = join(dir, "atomic-failure-out");
+    const input = join(src, "clip.mp4");
+    const output = join(out, "clip.mp4");
+    await mkdir(src, { recursive: true });
+    await writeFile(input, "this is not video data");
+    await makeVideo(output);
+    const existing = await readFile(output);
+
+    const report = await compressVideos([src], {
+      outDir: out,
+      overwrite: true,
+      skipLarger: false,
+    });
+
+    expect(report.results[0]?.status).toBe("failed");
+    expect(await readFile(output)).toEqual(existing);
+    expect(await temporaryFiles(out)).toEqual([]);
+  }, 120_000);
+
+  it("preserves an existing output when the new encode is larger", async () => {
+    const src = join(dir, "atomic-larger");
+    const out = join(dir, "atomic-larger-out");
+    const input = join(src, "clip.mp4");
+    const output = join(out, "clip.mp4");
+    await makeVideo(input);
+    await makeVideo(output);
+    const existing = await readFile(output);
+
+    const report = await compressVideos([src], {
+      outDir: out,
+      overwrite: true,
+      quality: toQuality(100),
+      preset: "ultrafast",
+    });
+
+    const result = report.results[0];
+    expect(result?.status).toBe("skipped");
+    expect(result?.status === "skipped" && result.reason).toBe(
+      "output-larger-than-input",
+    );
+    expect(await readFile(output)).toEqual(existing);
+    expect(await temporaryFiles(out)).toEqual([]);
+  }, 120_000);
+
+  it("removes the temporary output when a run is aborted", async () => {
+    const src = join(dir, "atomic-abort");
+    const out = join(dir, "atomic-abort-out");
+    await makeVideo(join(src, "first.mp4"));
+    await makeVideo(join(src, "second.mp4"));
+    const controller = new AbortController();
+
+    const run = compressVideos([src], {
+      outDir: out,
+      signal: controller.signal,
+      concurrency: 2,
+      skipLarger: false,
+      onProgress: (event) => {
+        if (event.type === "job-start") controller.abort();
+      },
+    });
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(controller.signal.aborted).toBe(true);
+    expect(await temporaryFiles(out)).toEqual([]);
   }, 120_000);
 
   it("does not enlarge a small source given a large resize box", async () => {

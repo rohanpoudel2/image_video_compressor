@@ -34,7 +34,15 @@ export async function mapWithConcurrency<T, R>(
     }
   }
 
-  await Promise.all(Array.from({ length: workers }, () => worker()));
+  // An aborted sibling may still be unwinding an encoder. Waiting for every
+  // active worker ensures its output cleanup finishes before the run rejects.
+  const settled = await Promise.allSettled(
+    Array.from({ length: workers }, () => worker()),
+  );
+  const rejected = settled.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (rejected) throw rejected.reason;
   return results;
 }
 

@@ -1,9 +1,10 @@
-import { access, stat, rm } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { join, relative, resolve, basename, extname, dirname } from "node:path";
 
 import { discoverFiles, type DiscoveredFile } from "./discover.js";
 import { mapWithConcurrency, defaultConcurrency } from "./pool.js";
 import { CompressorError, toFailure } from "./errors.js";
+import { withAtomicOutput } from "./atomic-output.js";
 import { encodeImage, resolveImageTarget } from "../codecs/image.js";
 import {
   encodeVideo,
@@ -393,7 +394,8 @@ async function runVideoJob(
   job: CompressionJob,
   ctx: ExecuteContext,
 ): Promise<JobOutput> {
-  if (!ctx.tools) {
+  const tools = ctx.tools;
+  if (!tools) {
     throw new CompressorError(
       "FFMPEG_NOT_FOUND",
       "ffmpeg is required to compress video.",
@@ -412,30 +414,37 @@ async function runVideoJob(
     ? planStreams(extension, probe)
     : { plan: openStreamPlan(probe), dropped: [] as string[] };
 
-  const args = isVideoContainer(extension)
-    ? curatedArgsFor(extension, job, ctx, probe, plan.plan)
-    : await openArgsFor(extension, job, ctx, probe, plan.plan);
+  return withAtomicOutput<JobOutput>(job.outputPath, async (temporaryPath) => {
+    const args = isVideoContainer(extension)
+      ? curatedArgsFor(extension, job, ctx, probe, plan.plan, temporaryPath)
+      : await openArgsFor(extension, job, ctx, probe, plan.plan, temporaryPath);
 
-  const encoded = await encodeVideo({
-    tools: ctx.tools,
-    inputPath: job.inputPath,
-    outputPath: job.outputPath,
-    args,
-    durationSeconds: probe.durationSeconds,
-    ...(ctx.options.onProgress
-      ? {
-          onProgress: (ratio: number) =>
-            ctx.options.onProgress?.({ type: "job-progress", job, ratio }),
-        }
-      : {}),
-    ...(ctx.options.signal ? { signal: ctx.options.signal } : {}),
+    const encoded = await encodeVideo({
+      tools,
+      inputPath: job.inputPath,
+      outputPath: temporaryPath,
+      args,
+      durationSeconds: probe.durationSeconds,
+      ...(ctx.options.onProgress
+        ? {
+            onProgress: (ratio: number) =>
+              ctx.options.onProgress?.({ type: "job-progress", job, ratio }),
+          }
+        : {}),
+      ...(ctx.options.signal ? { signal: ctx.options.signal } : {}),
+    });
+
+    if (ctx.skipLarger && encoded.bytes >= job.inputBytes) {
+      return {
+        value: { bytes: null, warnings: plan.dropped },
+        replace: false,
+      };
+    }
+    return {
+      value: { bytes: encoded.bytes, warnings: plan.dropped },
+      replace: true,
+    };
   });
-
-  if (ctx.skipLarger && encoded.bytes >= job.inputBytes) {
-    await rm(job.outputPath, { force: true }).catch(() => undefined);
-    return { bytes: null, warnings: plan.dropped };
-  }
-  return { bytes: encoded.bytes, warnings: plan.dropped };
 }
 
 const EMPTY_PROBE: MediaProbe = {
@@ -523,13 +532,14 @@ function curatedArgsFor(
   ctx: ExecuteContext,
   probe: MediaProbe,
   plan: StreamPlan | null,
+  outputPath: string,
 ): string[] {
   const videoCodec = resolveVideoCodec(container, ctx.options.videoCodec);
   const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec, probe.audio);
 
   return curatedArgs({
     inputPath: job.inputPath,
-    outputPath: job.outputPath,
+    outputPath,
     container,
     // Checked against the container's own matrix by the resolvers above.
     videoCodec: videoCodec,
@@ -557,6 +567,7 @@ async function openArgsFor(
   ctx: ExecuteContext,
   probe: MediaProbe,
   plan: StreamPlan | null,
+  outputPath: string,
 ): Promise<string[]> {
   const ffmpeg = ctx.tools?.ffmpeg ?? "ffmpeg";
   const muxer = extension.slice(1);
@@ -586,7 +597,7 @@ async function openArgsFor(
 
   return buildOpenVideoArgs({
     inputPath: job.inputPath,
-    outputPath: job.outputPath,
+    outputPath,
     extension,
     // null means "let ffmpeg decide", which is always a legal choice.
     videoCodec: requested ?? null,
