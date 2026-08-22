@@ -1,6 +1,6 @@
 {
   "name": "image-and-video-compressor-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for image-and-video-compressor — lets coding agents compress images and videos, probe media, and discover what the local ffmpeg and sharp builds actually support.",
   "author": "Rohan Poudel",
   "license": "MIT",
