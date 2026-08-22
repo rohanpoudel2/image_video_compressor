@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 
-import { tempDir, makeVideo, hasFfmpeg } from "./helpers.js";
+import { tempDir, makeVideo, hasFfmpeg, runCli } from "./helpers.js";
 import { compressVideos } from "../src/core/compress.js";
+import { ffmpegCapabilities } from "../src/codecs/ffmpeg-capabilities.js";
 import { buildVideoArgs, buildScaleFilter } from "../src/codecs/video.js";
 import { qualityToCrf } from "../src/types/video-formats.js";
 import { toQuality, toPixels } from "../src/types/brand.js";
@@ -243,6 +244,61 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect(controller.signal.aborted).toBe(true);
     expect(await temporaryFiles(out)).toEqual([]);
+  }, 120_000);
+
+  it("accepts a runtime video encoder outside the curated registry", async () => {
+    const caps = await ffmpegCapabilities("ffmpeg");
+    if (!caps.videoEncoders.has("ffv1") || !caps.muxers.has("nut")) return;
+
+    const src = join(dir, "open-codec-cli");
+    const out = join(dir, "open-codec-cli-out");
+    await makeVideo(join(src, "clip.mp4"));
+
+    const result = await runCli([
+      "video",
+      src,
+      "--to",
+      ".nut",
+      "--codec",
+      "ffv1",
+      "--out",
+      out,
+      "--no-skip-larger",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(await probeCodec(join(out, "clip.nut"), "v")).toBe("ffv1");
+  }, 120_000);
+
+  it("rejects a missing explicit encoder once before the worker pool starts", async () => {
+    const caps = await ffmpegCapabilities("ffmpeg");
+    const muxer = [...caps.muxers.keys()].find(
+      (name) => !["mp4", "mkv", "mov", "webm", "avi", "ogv"].includes(name),
+    );
+    expect(muxer).toBeDefined();
+
+    const src = join(dir, "missing-codec-preflight");
+    const first = join(src, "one.mp4");
+    await makeVideo(first);
+    await copyFile(first, join(src, "two.mp4"));
+
+    let starts = 0;
+    const error = await compressVideos([src], {
+      outDir: join(dir, "missing-codec-preflight-out"),
+      to: `.${muxer!}`,
+      videoCodec: "definitely-not-an-encoder",
+      onProgress: (event) => {
+        if (event.type === "job-start") starts++;
+      },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(CompressorError);
+    expect((error as CompressorError).code).toBe("INVALID_OPTION");
+    expect((error as CompressorError).message).toContain(
+      'no video encoder called "definitely-not-an-encoder"',
+    );
+    expect((error as CompressorError).message).toContain("Available video encoders");
+    expect(starts).toBe(0);
   }, 120_000);
 
   it("does not enlarge a small source given a large resize box", async () => {

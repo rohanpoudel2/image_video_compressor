@@ -12,7 +12,11 @@ import {
   buildOpenVideoArgs,
   type StreamPlan,
 } from "../codecs/video.js";
-import { muxerDetail, ffmpegCapabilities } from "../codecs/ffmpeg-capabilities.js";
+import {
+  muxerDetail,
+  ffmpegCapabilities,
+  type FfmpegCapabilities,
+} from "../codecs/ffmpeg-capabilities.js";
 import {
   resolveFfmpeg,
   probeMedia,
@@ -119,7 +123,12 @@ async function run(
   );
   assertNoCollisions(jobs);
 
-  options.onProgress?.({ type: "run-start", total: jobs.length });
+  const codecPlan = await preflightVideoCodecs(jobs, options, tools);
+  options.onProgress?.({
+    type: "run-start",
+    total: jobs.length,
+    ...(codecPlan.warnings.length > 0 ? { warnings: codecPlan.warnings } : {}),
+  });
 
   const concurrency =
     options.concurrency ?? defaultConcurrency(needsVideo ? "video" : "image");
@@ -135,6 +144,7 @@ async function run(
         dryRun,
         skipLarger,
         tools,
+        codecs: codecPlan.byFormat,
       });
       options.onProgress?.({ type: "job-done", job, result });
       return result;
@@ -143,7 +153,7 @@ async function run(
   );
 
   return {
-    summary: summarise(results, performance.now() - startedAt),
+    summary: summarise(results, performance.now() - startedAt, codecPlan.warnings),
     results,
     ...(tools ? { ffmpegPath: tools.ffmpeg } : {}),
     dryRun,
@@ -206,9 +216,6 @@ async function planJob(
   // any encoding, rather than producing one identical failure per file.
   if (file.kind === "image") {
     await resolveImageTarget(targetFormat);
-  } else if (isVideoContainer(targetFormat)) {
-    resolveVideoCodec(targetFormat, options.videoCodec);
-    resolveAudioCodec(targetFormat, options.audioCodec);
   }
 
   return {
@@ -293,6 +300,152 @@ interface ExecuteContext {
   readonly dryRun: boolean;
   readonly skipLarger: boolean;
   readonly tools: FfmpegTools | null;
+  readonly codecs: ReadonlyMap<string, RuntimeCodecSelection>;
+}
+
+interface RuntimeCodecSelection {
+  readonly videoCodec: string | null;
+  readonly audioCodec: string | null;
+}
+
+interface RuntimeCodecPlan {
+  readonly byFormat: ReadonlyMap<string, RuntimeCodecSelection>;
+  readonly warnings: readonly string[];
+}
+
+/** Validate each requested output configuration before any file starts encoding. */
+async function preflightVideoCodecs(
+  jobs: readonly CompressionJob[],
+  options: CompressOptions,
+  tools: FfmpegTools | null,
+): Promise<RuntimeCodecPlan> {
+  const formats = new Set(
+    jobs.filter((job) => job.kind === "video").map((job) => job.targetFormat),
+  );
+  const byFormat = new Map<string, RuntimeCodecSelection>();
+  const warnings: string[] = [];
+  const caps = tools ? await ffmpegCapabilities(tools.ffmpeg) : null;
+
+  for (const format of formats) {
+    if (isVideoContainer(format)) {
+      byFormat.set(format, curatedCodecSelection(format, options, caps, warnings));
+      continue;
+    }
+
+    if (caps) {
+      assertOpenEncoderAvailable(
+        "video",
+        format,
+        options.videoCodec,
+        caps.videoEncoders,
+      );
+      if (options.audioCodec !== "copy") {
+        assertOpenEncoderAvailable(
+          "audio",
+          format,
+          options.audioCodec,
+          caps.audioEncoders,
+        );
+      }
+    }
+
+    byFormat.set(format, {
+      videoCodec: options.videoCodec ?? null,
+      audioCodec: options.audioCodec ?? null,
+    });
+  }
+
+  return { byFormat, warnings };
+}
+
+function curatedCodecSelection(
+  container: VideoContainer,
+  options: CompressOptions,
+  caps: FfmpegCapabilities | null,
+  warnings: string[],
+): RuntimeCodecSelection {
+  let videoCodec = resolveVideoCodec(container, options.videoCodec);
+  let audioCodec = resolveAudioCodec(container, options.audioCodec);
+
+  if (caps && !caps.videoEncoders.has(videoCodec)) {
+    const available = VIDEO_CONTAINERS[container].video.filter((codec) =>
+      caps.videoEncoders.has(codec),
+    );
+    if (options.videoCodec !== undefined) {
+      throw missingCuratedEncoder("video", container, videoCodec, available);
+    }
+
+    const fallback = available[0];
+    if (!fallback) {
+      throw noCuratedEncoder("video", container, videoCodec);
+    }
+    warnings.push(
+      `This ffmpeg build lacks the default video encoder "${videoCodec}" for ${VIDEO_CONTAINERS[container].label}; using "${fallback}" instead.`,
+    );
+    videoCodec = fallback;
+  }
+
+  if (caps && audioCodec !== "copy" && !caps.audioEncoders.has(audioCodec)) {
+    const available = VIDEO_CONTAINERS[container].audio.filter(
+      (codec) => codec !== "copy" && caps.audioEncoders.has(codec),
+    );
+    if (options.audioCodec !== undefined) {
+      throw missingCuratedEncoder("audio", container, audioCodec, available);
+    }
+
+    const fallback = available[0];
+    if (!fallback) {
+      throw noCuratedEncoder("audio", container, audioCodec);
+    }
+    warnings.push(
+      `This ffmpeg build lacks the default audio encoder "${audioCodec}" for ${VIDEO_CONTAINERS[container].label}; using "${fallback}" whenever audio must be re-encoded.`,
+    );
+    audioCodec = fallback;
+  }
+
+  return { videoCodec, audioCodec };
+}
+
+function missingCuratedEncoder(
+  kind: "video" | "audio",
+  container: VideoContainer,
+  requested: string,
+  available: readonly string[],
+): CompressorError {
+  const label = VIDEO_CONTAINERS[container].label;
+  return new CompressorError(
+    "INVALID_OPTION",
+    `This ffmpeg build has no ${kind} encoder called "${requested}".\n` +
+      `Available ${kind} encoders for ${label} (${container}) in this build: ${available.length > 0 ? available.join(", ") : "none"}.`,
+  );
+}
+
+function noCuratedEncoder(
+  kind: "video" | "audio",
+  container: VideoContainer,
+  missingDefault: string,
+): CompressorError {
+  const label = VIDEO_CONTAINERS[container].label;
+  return new CompressorError(
+    "UNSUPPORTED_FORMAT",
+    `This ffmpeg build lacks the default ${kind} encoder "${missingDefault}" for ${label} (${container}), ` +
+      `and no other ${kind} encoder legal for that container is available.`,
+  );
+}
+
+function assertOpenEncoderAvailable(
+  kind: "video" | "audio",
+  format: string,
+  requested: string | undefined,
+  available: ReadonlySet<string>,
+): void {
+  if (requested === undefined || available.has(requested)) return;
+
+  throw new CompressorError(
+    "INVALID_OPTION",
+    `This ffmpeg build has no ${kind} encoder called "${requested}" for ${format}.\n` +
+      `Available ${kind} encoders in this build: ${[...available].sort().join(", ")}.`,
+  );
 }
 
 async function executeJob(
@@ -534,8 +687,15 @@ function curatedArgsFor(
   plan: StreamPlan | null,
   outputPath: string,
 ): string[] {
-  const videoCodec = resolveVideoCodec(container, ctx.options.videoCodec);
-  const audioCodec = resolveAudioCodec(container, ctx.options.audioCodec, probe.audio);
+  const selected = ctx.codecs.get(container);
+  const videoCodec = (selected?.videoCodec ??
+    resolveVideoCodec(container, ctx.options.videoCodec)) as VideoCodec;
+  const audioCodec = resolveAudioCodec(
+    container,
+    ctx.options.audioCodec,
+    probe.audio,
+    (selected?.audioCodec as AudioCodec | null | undefined) ?? undefined,
+  );
 
   return curatedArgs({
     inputPath: job.inputPath,
@@ -584,24 +744,15 @@ async function openArgsFor(
     }
   }
 
-  const requested = ctx.options.videoCodec;
-  if (requested !== undefined) {
-    const caps = await ffmpegCapabilities(ffmpeg);
-    if (!caps.videoEncoders.has(requested)) {
-      throw new CompressorError(
-        "INVALID_OPTION",
-        `This ffmpeg build has no video encoder called "${requested}".`,
-      );
-    }
-  }
+  const selected = ctx.codecs.get(extension);
 
   return buildOpenVideoArgs({
     inputPath: job.inputPath,
     outputPath,
     extension,
     // null means "let ffmpeg decide", which is always a legal choice.
-    videoCodec: requested ?? null,
-    audioCodec: ctx.options.audioCodec ?? null,
+    videoCodec: selected?.videoCodec ?? ctx.options.videoCodec ?? null,
+    audioCodec: selected?.audioCodec ?? ctx.options.audioCodec ?? null,
     quality: ctx.quality,
     speed: ctx.options.preset,
     fps: ctx.options.fps,
@@ -655,6 +806,7 @@ function resolveAudioCodec(
   container: VideoContainer,
   requested: string | undefined,
   sourceAudio: SourceAudio = [],
+  defaulted: AudioCodec = defaultAudioCodec(container),
 ): AudioCodec {
   if (requested === undefined) {
     // Copy only when *every* track can be carried: `-c:a copy` is all-or-nothing,
@@ -665,7 +817,7 @@ function resolveAudioCodec(
     ) {
       return "copy";
     }
-    return defaultAudioCodec(container);
+    return defaulted;
   }
 
   // `copy` is not an encoder, so it is not in the container's encoder list. It
@@ -704,6 +856,7 @@ async function exists(path: string): Promise<boolean> {
 export function summarise(
   results: readonly JobResult[],
   durationMs: number,
+  warnings: readonly string[] = [],
 ): CompressionSummary {
   let compressed = 0;
   let skipped = 0;
@@ -738,6 +891,7 @@ export function summarise(
     savedBytes,
     savedRatio: inputBytes > 0 ? savedBytes / inputBytes : 0,
     durationMs,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 

@@ -148,7 +148,7 @@ Parameters: `path` (required), `to` (required, a curated container), `quality`, 
 
 What this machine can genuinely encode and decode.
 
-Worth calling before choosing an output format. Support is build-dependent rather than fixed by the package: AVIF, JPEG XL and HEIC are frequently missing from sharp, and a minimal ffmpeg carries a fraction of the containers and codecs a full one does. The image list is produced by actually encoding a pixel with each candidate, so it reflects the binary you have rather than what the package hopes is there.
+Worth calling before choosing an output format. Support is build-dependent rather than fixed by the package: AVIF, JPEG XL and HEIC are frequently missing from sharp, and a minimal ffmpeg carries a fraction of the containers and codecs a full one does. The response includes the actual muxer, video encoder and audio encoder names as well as their counts. The image list is produced by actually encoding a pixel with each candidate, so it reflects the binary you have rather than what the package hopes is there.
 
 Parameters: `ffmpegPath` (optional).
 

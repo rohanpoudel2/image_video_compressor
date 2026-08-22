@@ -9,7 +9,11 @@ import { compress, compressImages, compressVideos } from "../core/compress.js";
 import { CompressorError } from "../core/errors.js";
 import { toQuality, toPixels, RangeValidationError } from "../types/brand.js";
 import { CURATED_IMAGE_FORMATS } from "../types/image-formats.js";
-import { VIDEO_CODECS, VIDEO_OUTPUT_FORMATS } from "../types/video-formats.js";
+import {
+  AUDIO_CODECS,
+  VIDEO_CODECS,
+  VIDEO_OUTPUT_FORMATS,
+} from "../types/video-formats.js";
 import { Renderer } from "./render.js";
 import { emitReport, emitError, emitFormats, collectCapabilities } from "./json.js";
 import type {
@@ -139,19 +143,24 @@ function addImageOptions(cmd: Command): Command {
 }
 
 function addVideoOptions(cmd: Command): Command {
+  // Encoder availability is a property of the local ffmpeg build. These names
+  // make useful starting points in help, but a Commander choice list would
+  // reject valid runtime encoders and promise unavailable ones.
+  const videoSuggestions = Object.keys(VIDEO_CODECS).join(", ");
+  const audioSuggestions = Object.keys(AUDIO_CODECS).join(", ");
+
   return cmd
     .addOption(
       new Option(
         "--codec <name>",
-        "video codec (must be legal for the container)",
-      ).choices(Object.keys(VIDEO_CODECS)),
+        `video codec (e.g. ${videoSuggestions}; checked against ffmpeg)`,
+      ),
     )
     .addOption(
-      new Option("--audio-codec <name>", "audio codec").choices([
-        "aac",
-        "libopus",
-        "copy",
-      ]),
+      new Option(
+        "--audio-codec <name>",
+        `audio codec (e.g. ${audioSuggestions}; checked against ffmpeg)`,
+      ),
     )
     .option(
       "--fps <n>",
@@ -385,7 +394,7 @@ async function printFormats(ffmpegPath?: string): Promise<void> {
       `  ${pc.dim("any of them can be used as --to; ffmpeg's own defaults apply.")}\n`,
   );
   out.write(
-    `  ${pc.dim(`${report.video.videoEncoders.length} video and ${report.video.audioEncoders.length} audio encoders available for --codec.`)}\n`,
+    `  ${pc.dim(`${report.video.videoEncoders.length} video encoders available for --codec and ${report.video.audioEncoders.length} audio encoders for --audio-codec.`)}\n`,
   );
 
   out.write(

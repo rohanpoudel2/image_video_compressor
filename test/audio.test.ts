@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { tempDir, makeVideo, hasFfmpeg } from "./helpers.js";
+import { tempDir, makeVideo, hasFfmpeg, runCli } from "./helpers.js";
 import { compressVideos } from "../src/core/compress.js";
+import { ffmpegCapabilities } from "../src/codecs/ffmpeg-capabilities.js";
 import { resolveAudioBitrate, curatedArgs } from "../src/codecs/video.js";
 import { parseProbe } from "../src/codecs/ffmpeg.js";
 import { canCopyAudioInto } from "../src/types/video-formats.js";
@@ -172,6 +173,51 @@ describe.skipIf(!(await hasFfmpeg()))("audio end-to-end (requires ffmpeg)", () =
     ({ dir, cleanup } = await tempDir());
   });
   afterAll(() => cleanup());
+
+  it("accepts libmp3lame on the CLI for Matroska and reaches the encoder", async () => {
+    const caps = await ffmpegCapabilities("ffmpeg");
+    if (!caps.audioEncoders.has("libmp3lame")) return;
+
+    const src = join(dir, "mp3-cli");
+    const out = join(dir, "mp3-cli-out");
+    await makeVideo(join(src, "clip.mp4"));
+
+    const result = await runCli([
+      "video",
+      src,
+      "--to",
+      ".mkv",
+      "--audio-codec",
+      "libmp3lame",
+      "--out",
+      out,
+      "--no-skip-larger",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(await probeAudio(join(out, "clip.mkv"))).toContain("mp3");
+  }, 120_000);
+
+  it("rejects an audio codec the target container cannot carry", async () => {
+    const src = join(dir, "illegal-audio-cli");
+    await makeVideo(join(src, "clip.mp4"));
+
+    const result = await runCli([
+      "video",
+      src,
+      "--to",
+      ".webm",
+      "--audio-codec",
+      "flac",
+      "--out",
+      join(dir, "illegal-audio-cli-out"),
+    ]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toMatch(/WebM cannot carry flac audio/i);
+    expect(result.stderr).toContain("Supported: libopus, libvorbis");
+    expect(result.stderr).not.toContain("Allowed choices");
+  }, 60_000);
 
   it("copies an AAC track into MP4 bit-for-bit", async () => {
     const src = join(dir, "copy");

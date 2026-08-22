@@ -59,6 +59,7 @@ export class Renderer {
 
     switch (event.type) {
       case "run-start":
+        for (const warning of event.warnings ?? []) this.warn(warning);
         this.start(event.total);
         break;
       case "job-start":
