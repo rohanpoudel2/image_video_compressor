@@ -181,6 +181,12 @@ imgvidcompress video ./clips --to .webm --quality 55
 imgvidcompress ./photos --overwrite
 ```
 
+A video dry run resolves ffmpeg, checks the selected codecs and probes every
+source so the plan can report stream drops such as subtitles or cover art. It
+is therefore slower than a file-list preview, but it fails before writing when
+the planned conversion cannot run. Dry runs do not encode, so they never
+estimate output size or savings.
+
 ## Formats
 
 Support is bounded by what your sharp and ffmpeg builds can actually do, not by a list in this README. Both are build-dependent, so ask the tool:
@@ -294,7 +300,9 @@ type JobResult =
   | ({ status: "failed" } & FailedResult);
 ```
 
-All three carry `kind`, `inputPath` and `outputPath`. Beyond that:
+All three carry `kind`, `inputPath`, `outputPath` and the resolved
+`targetFormat`. Video results also carry `videoCodec` and `audioCodec` once the
+file reaches planning. Beyond that:
 
 | Status         | Additional fields                                                                  |
 | -------------- | ---------------------------------------------------------------------------------- |
@@ -303,6 +311,10 @@ All three carry `kind`, `inputPath` and `outputPath`. Beyond that:
 | `"failed"`     | `error: { code, message, detail? }`                                                |
 
 `savedBytes` is positive when space was saved and negative if the output grew. `savedRatio` is the fraction of the original removed, 0-1.
+
+The summary's `planned` and `plannedInputBytes` fields count files a dry run
+would send to an encoder. Existing `inputBytes`, `outputBytes`, `savedBytes`
+and `savedRatio` remain actual encoded totals; dry runs leave them at zero.
 
 `isCompressed`, `isSkipped` and `isFailed` are exported as type guards, so consumers never hand-check `status`:
 
@@ -397,6 +409,8 @@ imgvidcompress formats --json | jq '.video.curated[].extension'
     "compressed": 2,
     "skipped": 0,
     "failed": 0,
+    "planned": 0,
+    "plannedInputBytes": 0,
     "inputBytes": 64931,
     "outputBytes": 33106,
     "savedBytes": 31825,
@@ -409,6 +423,7 @@ imgvidcompress formats --json | jq '.video.curated[].extension'
       "kind": "image",
       "inputPath": "…/photo-medium.jpg",
       "outputPath": "…/compressed/photo-medium.webp",
+      "targetFormat": ".webp",
       "inputBytes": 44331,
       "outputBytes": 17902,
       "savedBytes": 26429,
@@ -459,11 +474,15 @@ imgvidcompress ./public/img --dry-run --json \
   || { echo "An image exceeds 500 KB"; exit 1; }
 ```
 
-**Report the saving without writing anything**
+**Inspect the plan without writing anything**
 
 ```bash
-imgvidcompress ./assets --dry-run --json | jq '.summary'
+imgvidcompress ./assets --dry-run --json \
+  | jq '{plannedInputBytes: .summary.plannedInputBytes, files: [.results[] | {inputPath, outputPath, targetFormat, videoCodec, audioCodec, reason, warnings}]}'
 ```
+
+No savings value is included in the plan because savings cannot be known
+without encoding.
 
 **Use it from a build script**
 

@@ -433,5 +433,38 @@ describe.skipIf(!(await hasFfmpeg()))(
       const streams = await streamsOf(join(out, "input.avi"));
       expect(streams.match(/audio/g)).toHaveLength(2);
     }, 120_000);
+
+    it("reports the same stream drops in a dry run as the real run", async () => {
+      const out = join(dir, "avi-plan-out");
+      const dryRun = await compressVideos([input], {
+        outDir: out,
+        to: ".avi",
+        quality: toQuality(50),
+        dryRun: true,
+      });
+      const realRun = await compressVideos([input], {
+        outDir: out,
+        to: ".avi",
+        quality: toQuality(50),
+        skipLarger: false,
+      });
+
+      const planned = dryRun.results[0];
+      const actual = realRun.results[0];
+      const plannedWarnings =
+        planned && "warnings" in planned ? (planned.warnings ?? []) : [];
+      const actualWarnings =
+        actual && "warnings" in actual ? (actual.warnings ?? []) : [];
+
+      expect(planned).toMatchObject({
+        status: "skipped",
+        reason: "dry-run",
+        targetFormat: ".avi",
+        videoCodec: expect.any(String),
+        audioCodec: expect.any(String),
+      });
+      expect(plannedWarnings.length).toBeGreaterThan(0);
+      expect(plannedWarnings).toEqual(actualWarnings);
+    }, 120_000);
   },
 );
