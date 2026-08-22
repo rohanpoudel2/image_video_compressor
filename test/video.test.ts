@@ -301,6 +301,32 @@ describe.skipIf(!(await hasFfmpeg()))("video encoding (requires ffmpeg)", () => 
     expect(starts).toBe(0);
   }, 120_000);
 
+  it("runs the encoder capability preflight for a dry run", async () => {
+    const caps = await ffmpegCapabilities("ffmpeg");
+    const muxer = [...caps.muxers.keys()].find(
+      (name) => !["mp4", "mkv", "mov", "webm", "avi", "ogv"].includes(name),
+    );
+    expect(muxer).toBeDefined();
+
+    const src = join(dir, "dry-missing-codec-preflight");
+    await makeVideo(join(src, "clip.mp4"));
+
+    let starts = 0;
+    const error = await compressVideos([src], {
+      outDir: join(dir, "dry-missing-codec-preflight-out"),
+      to: `.${muxer!}`,
+      videoCodec: "definitely-not-an-encoder",
+      dryRun: true,
+      onProgress: (event) => {
+        if (event.type === "job-start") starts++;
+      },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(CompressorError);
+    expect((error as CompressorError).code).toBe("INVALID_OPTION");
+    expect(starts).toBe(0);
+  }, 120_000);
+
   it("does not enlarge a small source given a large resize box", async () => {
     // The fixture is 320x240; the box is far larger in both dimensions. This
     // encoded at 4000x3000 before the clamp, so assert against the real file

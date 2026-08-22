@@ -129,9 +129,7 @@ export class Renderer {
     // the list here would just double every line in the log. Skipped files are
     // included: "1 skipped" with no indication of which file, or why, is the
     // kind of summary that sends someone hunting through the output directory.
-    const rows = this.isTty
-      ? results
-      : results.filter((r) => r.status === "skipped" && report.dryRun);
+    const rows = this.isTty ? results : [];
 
     if (rows.length > 0) this.write("\n");
     for (const result of rows) {
@@ -159,8 +157,15 @@ export class Renderer {
     }
 
     if (report.dryRun) {
+      const skipped = summary.skipped - summary.planned;
+      const parts = [
+        `${summary.planned} file(s) planned (${formatBytes(summary.plannedInputBytes)} input)`,
+        skipped > 0 ? `${skipped} skipped` : null,
+        summary.failed > 0 ? pc.red(`${summary.failed} failed`) : null,
+        "nothing written",
+      ].filter((part): part is string => part !== null);
       this.write(
-        `\n  ${pc.bold(pc.yellow("Dry run"))} ${pc.dim(`— ${summary.totalFiles} file(s) planned, nothing written.`)}\n\n`,
+        `\n  ${pc.bold(pc.yellow("Dry run"))} ${pc.dim(`— ${parts.join(" · ")}.`)}\n\n`,
       );
       return;
     }
@@ -237,6 +242,9 @@ function plainLine(result: JobResult): string {
     }
     case "skipped": {
       const notes = (result.warnings ?? []).map((w) => `\n  warn    ${w}`).join("");
+      if (result.reason === "dry-run") {
+        return `  plan    ${basename(result.inputPath)} → ${basename(result.outputPath)}  ${formatBytes(result.inputBytes)} · ${settingsLabel(result)}${notes}`;
+      }
       return `  skip    ${basename(result.inputPath)}  (${result.reason})${notes}`;
     }
     case "failed":
@@ -255,10 +263,22 @@ function detailLine(result: JobResult): string {
       return `${pc.green("✓")} ${name} ${padStart(arrow, 30)}  ${tone(`${grew ? "+" : "−"}${formatPercent(Math.abs(result.savedRatio))}`)}`;
     }
     case "skipped":
+      if (result.reason === "dry-run") {
+        return `${pc.yellow("○")} ${name} ${pc.dim(`planned → ${basename(result.outputPath)}  ${formatBytes(result.inputBytes)} · ${settingsLabel(result)}`)}`;
+      }
       return `${pc.yellow("○")} ${name} ${pc.dim(skipLabel(result.reason))}`;
     case "failed":
       return `${pc.red("✗")} ${name} ${pc.red(result.error.code)}`;
   }
+}
+
+function settingsLabel(result: Extract<JobResult, { status: "skipped" }>): string {
+  const settings = [`format: ${result.targetFormat}`];
+  if (result.kind === "video") {
+    settings.push(`video: ${result.videoCodec ?? "ffmpeg default"}`);
+    settings.push(`audio: ${result.audioCodec ?? "ffmpeg default"}`);
+  }
+  return settings.join(" · ");
 }
 
 function skipLabel(reason: string): string {

@@ -152,6 +152,7 @@ export {
   type CompressionJob,
   type CompressionReport,
   type CompressionSummary,
+  type ResolvedJobSettings,
   type CommonOptions,
   type CompressOptions,
   type ImageOptions,
