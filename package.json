@@ -1,6 +1,6 @@
 {
   "name": "image-and-video-compressor",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Fast, type-safe image and video compression for Node.js — parallel by default, with a colorful CLI and machine-readable JSON output for AI agents.",
   "author": "Rohan Poudel",
   "license": "MIT",
@@ -36,6 +36,7 @@
   },
   "files": [
     "dist",
+    "CHANGELOG.md",
     "README.md",
     "MIGRATION.md",
     "LICENSE"
@@ -85,5 +86,8 @@
   "bugs": {
     "url": "https://github.com/rohanpoudel2/image_video_compressor/issues"
   },
-  "homepage": "https://github.com/rohanpoudel2/image_video_compressor#readme"
+  "homepage": "https://github.com/rohanpoudel2/image_video_compressor#readme",
+  "overrides": {
+    "esbuild": "^0.28.2"
+  }
 }
