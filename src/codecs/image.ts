@@ -1,7 +1,8 @@
 import sharp from "sharp";
-import { writeFile, mkdir } from "node:fs/promises";
-import { dirname, extname } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { CompressorError } from "../core/errors.js";
+import { withAtomicOutput } from "../core/atomic-output.js";
 import { sniffFile } from "../core/sniff.js";
 import { isInputOnlyImageFormat } from "../types/image-formats.js";
 import {
@@ -108,8 +109,10 @@ export async function encodeImage(
   return {
     bytes: buffer.byteLength,
     write: async () => {
-      await mkdir(dirname(outputPath), { recursive: true });
-      await writeFile(outputPath, buffer);
+      await withAtomicOutput(outputPath, async (temporaryPath) => {
+        await writeFile(temporaryPath, buffer);
+        return { value: undefined, replace: true };
+      });
     },
   };
 }

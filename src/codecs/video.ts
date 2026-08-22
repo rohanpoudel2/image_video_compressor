@@ -1,5 +1,4 @@
-import { mkdir, stat, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { stat } from "node:fs/promises";
 import { runFfmpeg, type FfmpegTools } from "./ffmpeg.js";
 import { CompressorError } from "../core/errors.js";
 import {
@@ -388,27 +387,19 @@ export interface EncodeVideoResult {
   readonly bytes: number;
 }
 
-/** Run one encode, cleaning up the partial file if anything goes wrong. */
+/** Run one encode into the caller-owned staging path. */
 export async function encodeVideo(
   params: EncodeVideoParams,
 ): Promise<EncodeVideoResult> {
   const { tools, outputPath } = params;
 
-  await mkdir(dirname(outputPath), { recursive: true });
-
-  try {
-    await runFfmpeg({
-      ffmpeg: tools.ffmpeg,
-      args: params.args,
-      durationSeconds: params.durationSeconds ?? null,
-      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-  } catch (err) {
-    // A half-written file is worse than none: it looks like a successful run.
-    await rm(outputPath, { force: true }).catch(() => undefined);
-    throw err;
-  }
+  await runFfmpeg({
+    ffmpeg: tools.ffmpeg,
+    args: params.args,
+    durationSeconds: params.durationSeconds ?? null,
+    ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
 
   const info = await stat(outputPath);
   return { bytes: info.size };
